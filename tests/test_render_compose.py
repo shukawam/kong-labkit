@@ -64,3 +64,59 @@ def test_services_partial_is_standalone_parseable():
     # 単体パースにはダミーの &default を補う（本物の値は他のテストで検証済み）
     doc = yaml.safe_load("default: &default {}\n" + raw)
     assert "otel-lgtm" in doc
+
+
+def test_plain_redis_image_and_healthcheck(compose_of):
+    doc = compose_of(only_services(ctx_for(cache={"type": "redis"}), "redis"))
+    svc = doc["services"]["redis"]
+    assert svc["image"] == "redis:8.0.2"
+    assert svc["healthcheck"]["test"] == ["CMD", "redis-cli", "ping"]
+    assert svc["ports"] == ["6379:6379"]
+
+
+def test_redis_stack_image(compose_of):
+    doc = compose_of(only_services(ctx_for(cache={"type": "redis-stack"}), "redis"))
+    assert doc["services"]["redis"]["image"] == "redis/redis-stack:7.4.0-v3"
+
+
+def test_redis_service_name_matches_wiring():
+    ctx = ctx_for(cache={"type": "redis-stack"})
+    # kongctl.yaml が vectordb.host として書く値と compose のサービス名がずれると接続できない
+    assert ctx.cache.host == "redis"
+    assert "redis" in render_all(only_services(ctx, "redis"))["compose.yaml"]
+
+
+def test_pgvector_service(compose_of):
+    ctx = ctx_for(
+        gateway="ai-gateway-v2",
+        vectordb={"type": "pgvector"},
+        ai={"semantic_cache": True},
+    )
+    doc = compose_of(only_services(ctx, "pgvector"))
+    svc = doc["services"]["pgvector"]
+    assert svc["image"] == "pgvector/pgvector:pg17"
+    assert svc["environment"]["POSTGRES_DB"] == "vectors"
+    assert svc["environment"]["POSTGRES_USER"] == "kong"
+    assert svc["ports"] == ["5432:5432"]
+    assert svc["healthcheck"]["test"] == ["CMD-SHELL", "pg_isready -U kong -d vectors"]
+
+
+def test_pgvector_host_port_shifts_when_kong_metastore_present(compose_of):
+    ctx = ctx_for(
+        control_plane="self-managed",
+        vectordb={"type": "pgvector"},
+    )
+    doc = compose_of(only_services(ctx, "pgvector"))
+    # ホスト側は 5433 に退避するが、コンテナ内は 5432 のまま
+    assert doc["services"]["pgvector"]["ports"] == ["5433:5432"]
+
+
+def test_pgvector_enables_extension_on_init(compose_of):
+    ctx = ctx_for(
+        gateway="ai-gateway-v2",
+        vectordb={"type": "pgvector"},
+        ai={"semantic_cache": True},
+    )
+    doc = compose_of(only_services(ctx, "pgvector"))
+    # pgvector イメージでも CREATE EXTENSION は自分で実行する必要がある
+    assert "/docker-entrypoint-initdb.d/" in doc["services"]["pgvector"]["volumes"][0]

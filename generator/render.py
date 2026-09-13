@@ -38,6 +38,9 @@ def template_vars(ctx: Ctx) -> dict:
 def render_all(ctx: Ctx) -> dict[str, str]:
     env = build_env()
     variables = template_vars(ctx)
-    return {
+    files = {
         "compose.yaml": env.get_template("compose.yaml.j2").render(**variables),
     }
+    if ctx.vector.enabled and ctx.vector.type.value == "pgvector":
+        files["config/pgvector/init.sql"] = "CREATE EXTENSION IF NOT EXISTS vector;\n"
+    return files

@@ -1,0 +1,11 @@
+redis:
+  <<: *default
+  container_name: redis
+  image: {{ cache.image }}
+  ports:
+    - {{ ports.cache }}:6379
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
