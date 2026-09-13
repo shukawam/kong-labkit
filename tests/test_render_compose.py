@@ -120,3 +120,84 @@ def test_pgvector_enables_extension_on_init(compose_of):
     doc = compose_of(only_services(ctx, "pgvector"))
     # pgvector イメージでも CREATE EXTENSION は自分で実行する必要がある
     assert "/docker-entrypoint-initdb.d/" in doc["services"]["pgvector"]["volumes"][0]
+
+
+def test_aigw_v2_konnect_wiring(compose_of):
+    ctx = ctx_for(gateway="ai-gateway-v2", region="eu")
+    doc = compose_of(only_services(ctx, "kong-aigw-v2"))
+    env = doc["services"]["kong"]["environment"]
+    assert env["KONG_CLUSTER_CONTROL_PLANE"] == "${CONTROL_PLANE_ID:-}.eu.cp.konghq.com:443"
+    assert env["KONG_CLUSTER_TELEMETRY_ENDPOINT"] == "${CONTROL_PLANE_ID:-}.eu.tp.konghq.com:443"
+    assert env["KONG_CLUSTER_MTLS"] == "pki"
+    assert doc["services"]["kong"]["volumes"] == [".certs:/etc/kong/cluster-certs"]
+
+
+def test_on_off_values_are_quoted_strings(compose_of):
+    # 裸の off は PyYAML が False にする。Kong は "false" を受け付けないので必ず文字列で渡す
+    doc = compose_of(only_services(ctx_for(gateway="ai-gateway-v2"), "kong-aigw-v2"))
+    env = doc["services"]["kong"]["environment"]
+    assert env["KONG_DATABASE"] == "off"
+    assert env["KONG_VITALS"] == "off"
+    assert env["KONG_KONNECT_MODE"] == "on"
+
+
+def test_aigw_v2_uses_expressions_router(compose_of):
+    doc = compose_of(only_services(ctx_for(gateway="ai-gateway-v2"), "kong-aigw-v2"))
+    assert doc["services"]["kong"]["environment"]["KONG_ROUTER_FLAVOR"] == "expressions"
+
+
+def test_tracing_only_when_otel_enabled(compose_of):
+    on = compose_of(only_services(ctx_for(gateway="ai-gateway-v2"), "kong-aigw-v2"))
+    assert on["services"]["kong"]["environment"]["KONG_TRACING_INSTRUMENTATIONS"] == "all"
+
+    off = compose_of(
+        only_services(
+            ctx_for(gateway="ai-gateway-v2", observability={"otel_lgtm": False}),
+            "kong-aigw-v2",
+        )
+    )
+    assert "KONG_TRACING_INSTRUMENTATIONS" not in off["services"]["kong"]["environment"]
+
+
+def test_konnect_dp_for_api_gateway(compose_of):
+    doc = compose_of(only_services(ctx_for(), "kong-dp"))
+    svc = doc["services"]["gateway"]
+    assert svc["image"] == "kong/kong-gateway:3.14"
+    assert svc["environment"]["KONG_ROLE"] == "data_plane"
+    assert svc["environment"]["KONG_KONNECT_MODE"] == "on"
+    assert svc["ports"] == ["8000:8000", "8100:8100"]
+
+
+def test_self_managed_emits_four_services(compose_of):
+    doc = compose_of(only_services(ctx_for(control_plane="self-managed"), "kong-self-managed"))
+    for name in ("database", "kong-bootstrap", "kong-cp", "kong-dp"):
+        assert name in doc["services"], name
+
+
+def test_self_managed_bootstrap_ordering(compose_of):
+    doc = compose_of(only_services(ctx_for(control_plane="self-managed"), "kong-self-managed"))
+    # bootstrap 完了前に CP が起動すると migrations 未適用で落ちる
+    assert doc["services"]["kong-bootstrap"]["depends_on"]["database"]["condition"] == "service_healthy"
+    assert (
+        doc["services"]["kong-cp"]["depends_on"]["kong-bootstrap"]["condition"]
+        == "service_completed_successfully"
+    )
+
+
+def test_self_managed_uses_shared_mtls_and_mounted_certs(compose_of):
+    doc = compose_of(only_services(ctx_for(control_plane="self-managed"), "kong-self-managed"))
+    assert doc["services"]["kong-dp"]["environment"]["KONG_CLUSTER_MTLS"] == "shared"
+    assert doc["services"]["kong-cp"]["volumes"] == ["./config/kong/certs:/etc/kong/certs"]
+
+
+def test_self_managed_admin_and_manager_ports(compose_of):
+    doc = compose_of(only_services(ctx_for(control_plane="self-managed"), "kong-self-managed"))
+    assert doc["services"]["kong-cp"]["ports"] == ["8001:8001", "8002:8002"]
+
+
+def test_self_managed_dp_trusts_forwarded_ip(compose_of):
+    doc = compose_of(only_services(ctx_for(control_plane="self-managed"), "kong-self-managed"))
+    env = doc["services"]["kong-dp"]["environment"]
+    assert env["KONG_TRUSTED_IPS"] == "0.0.0.0/0"
+    assert env["KONG_REAL_IP_HEADER"] == "X-Forwarded-For"
+    assert env["KONG_REAL_IP_RECURSIVE"] == "on"

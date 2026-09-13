@@ -1,0 +1,93 @@
+database:
+  <<: *default
+  container_name: database
+  image: postgres:17
+  environment:
+    POSTGRES_USER: kong
+    POSTGRES_DB: kong
+    POSTGRES_PASSWORD: kong
+  ports:
+    - {{ ports.kong_pg }}:5432
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U kong"]
+    interval: 10s
+    timeout: 10s
+    retries: 5
+
+kong-bootstrap:
+  <<: *default
+  container_name: kong-bootstrap
+  image: {{ kong.image }}
+  restart: "no"
+  depends_on:
+    database:
+      condition: service_healthy
+  command: kong migrations bootstrap
+  environment:
+    <<: *kong-env
+    KONG_LICENSE_DATA: ${KONG_LICENSE_DATA:-}
+
+kong-cp:
+  <<: *default
+  container_name: kong-cp
+  image: {{ kong.image }}
+  depends_on:
+    kong-bootstrap:
+      condition: service_completed_successfully
+  ports:
+    - {{ ports.admin }}:8001
+    - {{ ports.manager }}:8002
+  environment:
+    <<: *kong-env
+    KONG_ROLE: control_plane
+    KONG_ADMIN_LISTEN: 0.0.0.0:8001
+    KONG_ADMIN_GUI_LISTEN: 0.0.0.0:8002
+    KONG_CLUSTER_LISTEN: 0.0.0.0:8005
+    KONG_TELEMETRY_LISTEN: 0.0.0.0:8006
+    KONG_ADMIN_GUI_HOST: http://localhost:{{ ports.manager }}
+    KONG_CLUSTER_CERT: /etc/kong/certs/tls.crt
+    KONG_CLUSTER_CERT_KEY: /etc/kong/certs/tls.key
+    KONG_UNTRUSTED_LUA: "on"
+    KONG_LICENSE_DATA: ${KONG_LICENSE_DATA:-}
+{% if otel.enabled %}
+    KONG_TRACING_INSTRUMENTATIONS: all
+    KONG_TRACING_SAMPLING_RATE: "1.0"
+{% endif %}
+  volumes:
+    - ./config/kong/certs:/etc/kong/certs
+
+kong-dp:
+  <<: *default
+  container_name: kong-dp
+  image: {{ kong.image }}
+  depends_on:
+    kong-bootstrap:
+      condition: service_completed_successfully
+  ports:
+    - {{ ports.proxy }}:8000
+    - {{ ports.status }}:8100
+  environment:
+    KONG_ROLE: data_plane
+    KONG_DATABASE: "off"
+    KONG_CLUSTER_MTLS: shared
+    KONG_CLUSTER_CONTROL_PLANE: kong-cp:8005
+    KONG_CLUSTER_SERVER_NAME: kong-cluster
+    KONG_CLUSTER_TELEMETRY_ENDPOINT: kong-cp:8006
+    KONG_CLUSTER_TELEMETRY_SERVER_NAME: kong-cp
+    KONG_CLUSTER_CERT: /etc/kong/certs/tls.crt
+    KONG_CLUSTER_CERT_KEY: /etc/kong/certs/tls.key
+    KONG_STATUS_LISTEN: 0.0.0.0:8100
+    KONG_UNTRUSTED_LUA: "on"
+    KONG_LOG_LEVEL: debug
+    KONG_LICENSE_DATA: ${KONG_LICENSE_DATA:-}
+    KONG_TRUSTED_IPS: 0.0.0.0/0
+    KONG_REAL_IP_HEADER: X-Forwarded-For
+    KONG_REAL_IP_RECURSIVE: "on"
+    KONG_PROXY_ACCESS_LOG: /dev/stdout
+    KONG_PROXY_ERROR_LOG: /dev/stderr
+{% if otel.enabled %}
+    KONG_TRACING_INSTRUMENTATIONS: all
+    KONG_TRACING_SAMPLING_RATE: "1.0"
+{% endif %}
+  volumes:
+    - ./config/kong/certs:/etc/kong/certs
