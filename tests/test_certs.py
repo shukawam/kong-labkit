@@ -40,3 +40,11 @@ def test_creates_parent_directory(tmp_path):
     target = tmp_path / "nested" / ".certs"
     crt, _ = generate_cluster_cert(target, common_name="acme-gateway")
     assert crt.parent == target
+
+
+def test_basename_controls_filenames(tmp_path):
+    crt, key = generate_cluster_cert(
+        tmp_path / "certs", common_name="acme-cluster", basename="tls"
+    )
+    assert crt.name == "tls.crt"
+    assert key.name == "tls.key"

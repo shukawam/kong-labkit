@@ -7,12 +7,12 @@ class OpensslError(Exception):
 
 
 def generate_cluster_cert(
-    out_dir: Path, common_name: str, days: int = 1095
+    out_dir: Path, common_name: str, days: int = 1095, basename: str = "cluster"
 ) -> tuple[Path, Path]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    crt = out_dir / "cluster.crt"
-    key = out_dir / "cluster.key"
+    crt = out_dir / f"{basename}.crt"
+    key = out_dir / f"{basename}.key"
 
     cmd = [
         "openssl",
