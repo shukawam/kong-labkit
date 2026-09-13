@@ -1,0 +1,13 @@
+keycloak:
+  <<: *default
+  container_name: keycloak
+  image: quay.io/keycloak/keycloak:26.6.1
+  command: ["start-dev", "--import-realm"]
+  environment:
+    KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+    KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    KC_HOSTNAME: http://localhost:{{ ports.keycloak }}
+  ports:
+    - {{ ports.keycloak }}:8080
+  volumes:
+    - ./config/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro

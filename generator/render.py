@@ -43,4 +43,8 @@ def render_all(ctx: Ctx) -> dict[str, str]:
     }
     if ctx.vector.enabled and ctx.vector.type.value == "pgvector":
         files["config/pgvector/init.sql"] = "CREATE EXTENSION IF NOT EXISTS vector;\n"
+    if ctx.idp.type.value == "keycloak":
+        files["config/keycloak/realm-export.json"] = env.get_template(
+            "config/realm-export.json.j2"
+        ).render(**variables)
     return files

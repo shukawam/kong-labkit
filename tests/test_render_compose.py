@@ -201,3 +201,28 @@ def test_self_managed_dp_trusts_forwarded_ip(compose_of):
     assert env["KONG_TRUSTED_IPS"] == "0.0.0.0/0"
     assert env["KONG_REAL_IP_HEADER"] == "X-Forwarded-For"
     assert env["KONG_REAL_IP_RECURSIVE"] == "on"
+
+
+def test_keycloak_service(compose_of):
+    ctx = ctx_for(idp={"type": "keycloak", "realm": "acme"})
+    doc = compose_of(only_services(ctx, "keycloak"))
+    svc = doc["services"]["keycloak"]
+    assert svc["image"] == "quay.io/keycloak/keycloak:26.6.1"
+    assert svc["command"] == ["start-dev", "--import-realm"]
+    assert svc["ports"] == ["8080:8080"]
+
+
+def test_keycloak_hostname_matches_issuer(compose_of):
+    # KC_HOSTNAME とブラウザから見える URL がずれると issuer 検証が落ちる
+    ctx = ctx_for(idp={"type": "keycloak", "realm": "acme"})
+    doc = compose_of(only_services(ctx, "keycloak"))
+    assert doc["services"]["keycloak"]["environment"]["KC_HOSTNAME"] == "http://localhost:8080"
+    assert ctx.idp.issuer == "http://keycloak:8080/realms/acme"
+
+
+def test_keycloak_mounts_realm_export(compose_of):
+    ctx = ctx_for(idp={"type": "keycloak", "realm": "acme"})
+    doc = compose_of(only_services(ctx, "keycloak"))
+    assert doc["services"]["keycloak"]["volumes"] == [
+        "./config/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro"
+    ]
