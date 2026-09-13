@@ -40,6 +40,12 @@ def render_all(ctx: Ctx) -> dict[str, str]:
     variables = template_vars(ctx)
     files = {
         "compose.yaml": env.get_template("compose.yaml.j2").render(**variables),
+        "mise.toml": env.get_template("mise.toml.j2").render(**variables),
+        "README.md": env.get_template("README.md.j2").render(**variables),
+        ".env": env.get_template("env.j2").render(blank=False, **variables),
+        ".env.example": env.get_template("env.j2").render(blank=True, **variables),
+        ".gitignore": env.get_template("gitignore.j2").render(**variables),
+        "docs/.gitkeep": "",
     }
     if ctx.vector.enabled and ctx.vector.type.value == "pgvector":
         files["config/pgvector/init.sql"] = "CREATE EXTENSION IF NOT EXISTS vector;\n"
