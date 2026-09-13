@@ -34,3 +34,19 @@ def compose_of():
         return yaml.safe_load(render_all(ctx)["compose.yaml"])
 
     return _compose_of
+
+
+class KongctlLoader(yaml.SafeLoader):
+    """kongctl のカスタムタグを値として保持したまま読むためのローダ。"""
+
+
+def _keep_tag(loader, node):
+    return {"__tag__": node.tag, "value": loader.construct_scalar(node)}
+
+
+for _tag in ("!file", "!env", "!ref", "!secret"):
+    KongctlLoader.add_constructor(_tag, _keep_tag)
+
+
+def load_kongctl(text: str) -> dict:
+    return yaml.load(text, Loader=KongctlLoader)

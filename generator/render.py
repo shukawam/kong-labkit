@@ -47,4 +47,8 @@ def render_all(ctx: Ctx) -> dict[str, str]:
         files["config/keycloak/realm-export.json"] = env.get_template(
             "config/realm-export.json.j2"
         ).render(**variables)
+    if ctx.spec.gateway.value == "ai-gateway-v2":
+        files["config/kongctl.yaml"] = env.get_template("config/kongctl.yaml.j2").render(
+            **variables
+        )
     return files
