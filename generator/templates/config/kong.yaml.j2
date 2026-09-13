@@ -1,0 +1,121 @@
+_format_version: "3.0"
+
+{% if spec.gateway.value == 'ai-gateway-v1' or upstream.enabled %}
+services:
+{% else %}
+services: []
+{% endif %}
+{% if spec.gateway.value == 'ai-gateway-v1' %}
+  - name: llm
+    # ai-proxy-advanced が上流を差し替えるが、service には URL が必須なので捨て値を置く
+    url: http://localhost:32000
+    routes:
+      - name: chat
+        paths:
+          - /v1/chat/completions
+        methods:
+          - POST
+        strip_path: false
+    plugins:
+      - name: ai-proxy-advanced
+        config:
+          targets:
+{% for provider in spec.ai.providers %}
+{% for model in provider.models %}
+            - route_type: llm/v1/chat
+              auth:
+{% if provider.type.value == 'azure' %}
+                header_name: api-key
+                header_value: ${AZURE_OPENAI_API_KEY}
+{% else %}
+                header_name: Authorization
+                header_value: Bearer ${LLM_API_KEY}
+{% endif %}
+              model:
+                provider: {{ provider.type.value }}
+                name: {{ model.name }}
+                options:
+{% if provider.instance %}
+                  azure_instance: {{ provider.instance }}
+{% endif %}
+{% if model.deployment_id %}
+                  azure_deployment_id: {{ model.deployment_id }}
+{% endif %}
+{% if model.api_version %}
+                  azure_api_version: "{{ model.api_version }}"
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% if vector.enabled %}
+      - name: ai-semantic-cache
+        config:
+          embeddings:
+            auth:
+              header_name: api-key
+              header_value: ${AZURE_OPENAI_API_KEY}
+            model:
+              provider: openai
+              name: {{ spec.ai.embedding_model }}
+          vectordb:
+            strategy: {{ 'redis' if vector.type.value == 'redis-stack' else 'pgvector' }}
+            dimensions: {{ vector.dimensions }}
+            distance_metric: {{ vector.distance_metric }}
+            threshold: {{ vector.threshold }}
+{% if vector.type.value == 'redis-stack' %}
+            redis:
+              host: {{ vector.host }}
+              port: {{ vector.port }}
+{% else %}
+            pgvector:
+              host: {{ vector.host }}
+              port: {{ vector.port }}
+              database: {{ vector.database }}
+              user: {{ vector.user }}
+{% endif %}
+{% endif %}
+{% if idp.enabled %}
+      - name: openid-connect
+        config:
+          issuer: {{ idp.issuer }}
+          client_id:
+            - {{ idp.client_id }}
+          client_secret:
+            - ${KEYCLOAK_CLIENT_SECRET}
+          auth_methods:
+            - bearer
+            - client_credentials
+{% endif %}
+{% elif upstream.enabled %}
+  - name: {{ upstream.service_name }}
+    url: {{ upstream.url }}
+    routes:
+      - name: {{ upstream.service_name }}
+        paths:
+          - /{{ upstream.service_name }}
+        strip_path: true
+{% if idp.enabled %}
+    plugins:
+      - name: openid-connect
+        config:
+          issuer: {{ idp.issuer }}
+          client_id:
+            - {{ idp.client_id }}
+          client_secret:
+            - ${KEYCLOAK_CLIENT_SECRET}
+          auth_methods:
+            - bearer
+            - client_credentials
+{% endif %}
+{% endif %}
+
+{% if otel.enabled %}
+plugins:
+  - name: opentelemetry
+    config:
+      traces_endpoint: {{ otel.endpoint }}/v1/traces
+      logs_endpoint: {{ otel.endpoint }}/v1/logs
+      resource_attributes:
+        service.name: {{ kong.cp_name }}
+{% else %}
+plugins: []
+{% endif %}

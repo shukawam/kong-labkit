@@ -51,4 +51,8 @@ def render_all(ctx: Ctx) -> dict[str, str]:
         files["config/kongctl.yaml"] = env.get_template("config/kongctl.yaml.j2").render(
             **variables
         )
+    if ctx.spec.gateway.value in ("ai-gateway-v1", "api-gateway"):
+        files["config/kong/kong.yaml"] = env.get_template("config/kong.yaml.j2").render(
+            **variables
+        )
     return files

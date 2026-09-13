@@ -226,3 +226,10 @@ def test_keycloak_mounts_realm_export(compose_of):
     assert doc["services"]["keycloak"]["volumes"] == [
         "./config/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro"
     ]
+
+
+def test_httpbin_service(compose_of):
+    doc = compose_of(only_services(ctx_for(), "httpbin"))
+    svc = doc["services"]["httpbin"]
+    assert svc["image"] == "kennethreitz/httpbin"
+    assert svc["ports"] == ["8081:80"]
