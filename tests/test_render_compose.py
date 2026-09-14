@@ -213,11 +213,12 @@ def test_keycloak_service(compose_of):
 
 
 def test_keycloak_hostname_matches_issuer(compose_of):
-    # KC_HOSTNAME とブラウザから見える URL がずれると issuer 検証が落ちる
+    # ブラウザ向けの localhost ではなくコンテナ内の名前を KC_HOSTNAME に使うことで、
+    # Keycloak が発行する iss と Kong が検証する issuer を一致させている
     ctx = ctx_for(idp={"type": "keycloak", "realm": "acme"})
     doc = compose_of(only_services(ctx, "keycloak"))
-    assert doc["services"]["keycloak"]["environment"]["KC_HOSTNAME"] == "http://localhost:8080"
-    assert ctx.idp.issuer == "http://keycloak:8080/realms/acme"
+    kc_hostname = doc["services"]["keycloak"]["environment"]["KC_HOSTNAME"]
+    assert ctx.idp.issuer == f"{kc_hostname}/realms/{ctx.idp.realm}"
 
 
 def test_keycloak_mounts_realm_export(compose_of):
