@@ -1,0 +1,15 @@
+_defaults:
+  kongctl:
+    namespace: acme
+
+control_planes:
+  - ref: acme-ai-gateway
+    name: acme-ai-gateway
+    cluster_type: CLUSTER_TYPE_CONTROL_PLANE
+    auth_type: pinned_client_certs
+    data_plane_certificates:
+      - ref: acme-ai-gateway-cert
+        cert: !file ../.certs/cluster.crt
+    _deck:
+      files:
+        - kong/kong.yaml

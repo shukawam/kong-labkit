@@ -1,4 +1,42 @@
 _format_version: "3.0"
+{% macro auth_plugin() %}
+{% if idp.auth_plugin == 'openid-connect' %}
+      - name: openid-connect
+        config:
+          issuer: '{{ idp.issuer }}'
+          client_id:
+            - '{{ idp.client_id }}'
+          client_secret:
+            - '{{ idp.client_secret }}'
+          # decK が明示値なしの sync を拒否するため固定値を設定する
+          cache_tokens_salt: local-dev-salt
+          auth_methods:
+            - bearer
+            - client_credentials
+{% elif idp.auth_plugin == 'ldap-auth-advanced' %}
+      - name: ldap-auth-advanced
+        config:
+          ldap_host: {{ idp.ldap.host }}
+          ldap_port: 3890
+          # 検索してから bind するので、ユーザーの DN を組み立てる必要がない
+          bind_dn: {{ idp.ldap.bind_dn }}
+          ldap_password: {{ idp.ldap.bind_password }}
+          base_dn: {{ idp.ldap.users_dn }}
+          attribute: {{ idp.ldap.attribute }}
+          # lldap は平文 LDAP のみを listen する
+          ldaps: false
+          start_tls: false
+          verify_ldap_host: false
+          cache_ttl: 60
+          # Consumer が無いユーザーも通す。認証と Consumer 割り当てを別々に試せる
+          consumer_optional: true
+          consumer_by:
+            - username
+          group_base_dn: {{ idp.ldap.groups_dn }}
+          group_name_attribute: cn
+          group_member_attribute: member
+{% endif %}
+{% endmacro %}
 
 {% if spec.gateway.value == 'ai-gateway-v1' or upstream.enabled %}
 services:
@@ -77,18 +115,7 @@ services: []
 {% endif %}
 {% endif %}
 {% if idp.enabled %}
-      - name: openid-connect
-        config:
-          issuer: '{{ idp.issuer }}'
-          client_id:
-            - '{{ idp.client_id }}'
-          client_secret:
-            - '{{ idp.client_secret }}'
-          # decK が明示値なしの sync を拒否するため固定値を設定する
-          cache_tokens_salt: local-dev-salt
-          auth_methods:
-            - bearer
-            - client_credentials
+{{ auth_plugin() -}}
 {% endif %}
 {% elif upstream.enabled %}
   - name: {{ upstream.service_name }}
@@ -104,21 +131,18 @@ services: []
           - https
 {% if idp.enabled %}
     plugins:
-      - name: openid-connect
-        config:
-          issuer: '{{ idp.issuer }}'
-          client_id:
-            - '{{ idp.client_id }}'
-          client_secret:
-            - '{{ idp.client_secret }}'
-          # decK が明示値なしの sync を拒否するため固定値を設定する
-          cache_tokens_salt: local-dev-salt
-          auth_methods:
-            - bearer
-            - client_credentials
+{{ auth_plugin() -}}
 {% endif %}
 {% endif %}
 
+{% if idp.type.value == 'ldap' %}
+# ldap-auth-advanced の consumer_by が突き合わせる先。LDAP の認証成功だけでは Consumer は生えない
+consumers:
+{% for user in idp.ldap.users %}
+  - username: {{ user.name }}
+{% endfor %}
+
+{% endif %}
 {% if otel.enabled %}
 plugins:
   - name: opentelemetry

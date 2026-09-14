@@ -11,7 +11,7 @@ EXAMPLES = sorted((ROOT / "examples").glob("*.yaml"))
 
 
 def test_examples_exist():
-    assert len(EXAMPLES) == 3, [e.name for e in EXAMPLES]
+    assert len(EXAMPLES) == 4, [e.name for e in EXAMPLES]
 
 
 @pytest.mark.parametrize("example", EXAMPLES, ids=lambda p: p.stem)

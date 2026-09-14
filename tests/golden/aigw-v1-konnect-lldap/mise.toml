@@ -34,10 +34,10 @@ if [ ! -f .certs/cluster.crt ]; then
   mise run certs
 fi
 
-kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve
+DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve
 
 # --columns はヘッダ 1 行と値 1 行を返すので、jq を足さずに最終行だけ取る
-endpoint=$(kongctl get konnect ai-gateway acme-ai-gateway --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --columns 'EP=.endpoints.configuration' | tail -n 1)
+endpoint=$(kongctl get konnect gateway control-planes acme-ai-gateway --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --columns 'EP=.config.control_plane_endpoint' | tail -n 1)
 cp_id=${endpoint#https://}
 cp_id=${cp_id%%.*}
 if [ -z "$cp_id" ]; then
@@ -64,11 +64,11 @@ echo "起動しました。mise run smoke で疎通を確認してください�
 
 [tasks.sync]
 description = "宣言的設定を適用する"
-run = 'kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve'
+run = 'DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve'
 
 [tasks.diff]
 description = "宣言的設定の差分を見る"
-run = 'kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT"'
+run = 'DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT"'
 
 [tasks.logs]
 description = "ログを追う。サービス名を引数で渡せる"
@@ -78,10 +78,11 @@ run = 'docker compose logs -f {{arg(name="service", default="")}}'
 description = "主要経路を叩いて疎通を確認する"
 run = '''
 set -e
-curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8100/status
-curl -sS -f -X POST http://localhost:8000/v1/gpt-5-6/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"messages":[{"role":"user","content":"ping"}]}' > /dev/null
+code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"ping"}]}')
+test "$code" = "401"
+# 上流の資格情報の正否とは切り離し、LDAP の bind が通ったことだけを見る
+code=$(curl -sS -o /dev/null -w '%{http_code}' -u developer:developer-password -X POST http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"ping"}]}')
+test "$code" != "401"
 echo "smoke: OK"
 '''
 

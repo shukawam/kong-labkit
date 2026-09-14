@@ -23,26 +23,78 @@ openssl req -new -x509 -nodes -newkey rsa:2048 \
   -keyout {{ certs.key_path }} -out {{ certs.crt_path }} -days {{ certs.days }}
 chmod 600 {{ certs.key_path }}
 {% if spec.control_plane.value == 'konnect' %}
-echo "生成しました。Konnect の Control Plane に {{ certs.crt_path }} を登録してください。"
+echo "生成しました。mise run sync で {{ certs.crt_path }} を Konnect に登録し、mise run up で環境を起動してください。起動済みの場合は docker compose restart で証明書を読み直してください。"
 {% endif %}
+'''
+
+[tasks.setup]
+description = "証明書の用意から環境の起動までを通しで行う"
+run = '''
+set -euo pipefail
+
+if [ ! -f {{ certs.crt_path }} ]; then
+  mise run certs
+fi
+{% if spec.control_plane.value == 'konnect' %}
+
+{{ deck.env_prefix }}kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT" --auto-approve
+
+# --columns はヘッダ 1 行と値 1 行を返すので、jq を足さずに最終行だけ取る
+{% if spec.gateway.value == 'ai-gateway-v2' %}
+endpoint=$(kongctl get konnect ai-gateway {{ kong.cp_name }} --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT" --columns 'EP=.endpoints.configuration' | tail -n 1)
+{% else %}
+endpoint=$(kongctl get konnect gateway control-planes {{ kong.cp_name }} --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT" --columns 'EP=.config.control_plane_endpoint' | tail -n 1)
+{% endif %}
+cp_id=${endpoint#https://}
+cp_id=${cp_id%%.*}
+if [ -z "$cp_id" ]; then
+  echo "{{ kong.cp_name }} のエンドポイントを取得できませんでした。mise run sync が成功しているか確認してください。" >&2
+  exit 1
+fi
+
+# .env には API キーも入っている。想定外の形なら追記せずに止める
+if ! grep -q '^CONTROL_PLANE_ID=' .env; then
+  echo ".env に CONTROL_PLANE_ID の行がありません。CONTROL_PLANE_ID=\"$cp_id\" を手で追記してください。" >&2
+  exit 1
+fi
+tmp=$(mktemp ./.env.XXXXXX)
+trap 'rm -f "$tmp"' EXIT
+sed 's|^CONTROL_PLANE_ID=.*|CONTROL_PLANE_ID="'"$cp_id"'"|' .env > "$tmp"
+mv "$tmp" .env
+trap - EXIT
+echo "CONTROL_PLANE_ID=$cp_id を .env に反映しました。"
+
+docker compose up -d
+{% else %}
+
+docker compose up -d
+
+# ローカルの Control Plane は Admin API が開くまで sync を受け付けない
+for _ in $(seq 1 60); do
+  if curl -sS -o /dev/null http://localhost:{{ ports.admin }}/status; then
+    break
+  fi
+  sleep 2
+done
+
+{{ deck.env_prefix }}deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:{{ ports.admin }}
+{% endif %}
+
+echo "起動しました。mise run smoke で疎通を確認してください。"
 '''
 
 [tasks.sync]
 description = "宣言的設定を適用する"
-{% if spec.gateway.value == 'ai-gateway-v2' %}
-run = 'KONGCTL_KONNECT_PAT="$KONNECT_PAT" kongctl sync konnect -f config/kongctl.yaml --auto-approve'
-{% elif spec.control_plane.value == 'konnect' %}
-run = '{{ deck.env_prefix }}deck gateway sync config/kong/kong.yaml --konnect-token "$KONNECT_PAT" --konnect-addr {{ kong.konnect_api_url }} --konnect-control-plane-name {{ kong.cp_name }}'
+{% if spec.control_plane.value == 'konnect' %}
+run = '{{ deck.env_prefix }}kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT" --auto-approve'
 {% else %}
 run = '{{ deck.env_prefix }}deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:{{ ports.admin }}'
 {% endif %}
 
 [tasks.diff]
 description = "宣言的設定の差分を見る"
-{% if spec.gateway.value == 'ai-gateway-v2' %}
-run = 'KONGCTL_KONNECT_PAT="$KONNECT_PAT" kongctl diff konnect -f config/kongctl.yaml'
-{% elif spec.control_plane.value == 'konnect' %}
-run = '{{ deck.env_prefix }}deck gateway diff config/kong/kong.yaml --konnect-token "$KONNECT_PAT" --konnect-addr {{ kong.konnect_api_url }} --konnect-control-plane-name {{ kong.cp_name }}'
+{% if spec.control_plane.value == 'konnect' %}
+run = '{{ deck.env_prefix }}kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT"'
 {% else %}
 run = '{{ deck.env_prefix }}deck gateway diff config/kong/kong.yaml --kong-addr http://localhost:{{ ports.admin }}'
 {% endif %}
@@ -64,6 +116,20 @@ curl -sS -f -X POST http://localhost:{{ ports.proxy }}/v1/{{ model.name }}/chat/
   -d '{"messages":[{"role":"user","content":"ping"}]}' > /dev/null
 {% endfor %}
 {% endfor %}
+{% elif idp.ldap %}
+{% if upstream.enabled %}
+{% set probe = "http://localhost:" ~ ports.proxy ~ "/" ~ upstream.service_name ~ "/status/200" %}
+code=$(curl -sS -o /dev/null -w '%{http_code}' {{ probe }})
+test "$code" = "401"
+curl -sS -f -u {{ idp.test_username }}:{{ idp.test_password }} {{ probe }} > /dev/null
+{% else %}
+{% set probe = "-X POST http://localhost:" ~ ports.proxy ~ "/v1/chat/completions -H 'Content-Type: application/json' -d '{\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}'" %}
+code=$(curl -sS -o /dev/null -w '%{http_code}' {{ probe }})
+test "$code" = "401"
+# 上流の資格情報の正否とは切り離し、LDAP の bind が通ったことだけを見る
+code=$(curl -sS -o /dev/null -w '%{http_code}' -u {{ idp.test_username }}:{{ idp.test_password }} {{ probe }})
+test "$code" != "401"
+{% endif %}
 {% elif upstream.enabled and idp.token_endpoint %}
 TOKEN=$(curl -sS -f -X POST {{ idp.token_endpoint }} \
   -d grant_type=password -d client_id={{ idp.public_client_id }} \

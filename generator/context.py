@@ -7,6 +7,7 @@ from generator.schema import (
     EnvSpec,
     Gateway,
     IdpType,
+    LdapUser,
     ProviderType,
     UpstreamType,
     VectorDbType,
@@ -26,6 +27,8 @@ PREFERRED_PORTS: dict[str, int] = {
     "otlp_grpc": 4317,
     "otlp_http": 4318,
     "keycloak": 8080,
+    "ldap": 3890,
+    "lldap_web": 17170,
     "httpbin": 8081,
     "cache": 6379,
     "kong_pg": 5432,
@@ -42,6 +45,8 @@ _ALLOCATION_ORDER = [
     "otlp_grpc",
     "otlp_http",
     "keycloak",
+    "ldap",
+    "lldap_web",
     "httpbin",
     "cache",
     "kong_pg",
@@ -57,6 +62,8 @@ def _required_keys(spec: EnvSpec) -> set[str]:
         keys |= {"grafana", "otlp_grpc", "otlp_http"}
     if spec.idp.type is IdpType.KEYCLOAK:
         keys.add("keycloak")
+    if spec.idp.type is IdpType.LDAP:
+        keys |= {"ldap", "lldap_web"}
     if spec.upstream is UpstreamType.HTTPBIN:
         keys.add("httpbin")
     if spec.cache.type is not CacheType.NONE:
@@ -100,6 +107,8 @@ KONG_IMAGES = {
     Gateway.API_GATEWAY: "kong/kong-gateway:3.14",
 }
 
+LLDAP_IMAGE = "lldap/lldap:v0.6.3-alpine"
+
 CACHE_IMAGES = {
     CacheType.REDIS: "redis:8.0.2",
     CacheType.REDIS_STACK: "redis/redis-stack:7.4.0-v3",
@@ -127,9 +136,38 @@ class KongCtx:
 
 
 @dataclass(frozen=True)
+class LdapUserCtx:
+    name: str
+    email: str
+    password: str
+    groups: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LdapCtx:
+    image: str
+    host: str
+    port: int
+    web_port: int
+    base_dn: str
+    users_dn: str
+    groups_dn: str
+    admin_name: str
+    bind_dn: str
+    bind_password: str
+    jwt_secret: str
+    attribute: str
+    users: tuple[LdapUserCtx, ...]
+    groups: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class IdpCtx:
     type: IdpType
     enabled: bool
+    # kong.yaml に出す認証プラグイン名。enabled だけでは OIDC と LDAP を分けられない
+    auth_plugin: str | None
+    ldap: LdapCtx | None
     realm: str | None
     issuer: str | None
     client_id: str | None
@@ -247,7 +285,7 @@ def _build_kong(spec: EnvSpec) -> KongCtx:
     suffix = "ai-gateway" if spec.is_ai else "gateway"
     return KongCtx(
         image=KONG_IMAGES[spec.gateway],
-        cp_name=f"{spec.customer}-{suffix}",
+        cp_name=f"{spec.konnect_name or spec.customer}-{suffix}",
         konnect_domain=f"{spec.region}.cp.konghq.com" if konnect else None,
         konnect_telemetry_domain=f"{spec.region}.tp.konghq.com" if konnect else None,
         konnect_api_url=f"https://{spec.region}.api.konghq.com" if konnect else None,
@@ -262,6 +300,12 @@ KEYCLOAK_TEST_PASSWORD = "tester"
 # ローカル検証用の固定値。乱数にするとゴールデンテストが毎回落ちる
 KEYCLOAK_CLIENT_SECRET = "local-dev-secret"
 PGVECTOR_PASSWORD = "kong"
+
+LLDAP_ADMIN_NAME = "admin"
+# lldap は admin パスワードに 8 文字以上を要求する
+LLDAP_ADMIN_PASSWORD = "local-dev-password"
+LLDAP_JWT_SECRET = "local-dev-jwt-secret"
+LLDAP_TEST_USER = "tester"
 
 
 class _DeckEnv:
@@ -286,12 +330,53 @@ def _yaml_scalar(value: str) -> str:
     return "'" + value + "'"
 
 
+def _build_ldap_users(spec: EnvSpec) -> tuple[LdapUserCtx, ...]:
+    declared = spec.idp.users or [LdapUser(name=LLDAP_TEST_USER, groups=[f"{spec.customer}-ai-users"])]
+    return tuple(
+        LdapUserCtx(
+            name=user.name,
+            email=user.email or f"{user.name}@example.com",
+            # lldap は 8 文字以上を要求するので、名前から導く既定値も十分な長さになる
+            password=user.password or f"{user.name}-password",
+            groups=tuple(user.groups),
+        )
+        for user in declared
+    )
+
+
+def _build_ldap(spec: EnvSpec, ports: dict[str, int]) -> LdapCtx:
+    base_dn = f"dc={spec.customer},dc=local"
+    users_dn = f"ou=people,{base_dn}"
+    users = _build_ldap_users(spec)
+    # dict.fromkeys で宣言順を保ったまま重複を潰す
+    groups = tuple(dict.fromkeys(group for user in users for group in user.groups))
+    return LdapCtx(
+        image=LLDAP_IMAGE,
+        host="lldap",
+        port=ports["ldap"],
+        web_port=ports["lldap_web"],
+        base_dn=base_dn,
+        users_dn=users_dn,
+        groups_dn=f"ou=groups,{base_dn}",
+        admin_name=LLDAP_ADMIN_NAME,
+        # lldap は ldap_user_dn に素の名前を受け取り、cn=<name>,ou=people,<base> を組み立てる
+        bind_dn=f"cn={LLDAP_ADMIN_NAME},{users_dn}",
+        bind_password=LLDAP_ADMIN_PASSWORD,
+        jwt_secret=LLDAP_JWT_SECRET,
+        attribute="uid",
+        users=users,
+        groups=groups,
+    )
+
+
 def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpCtx:
     if spec.idp.type is IdpType.KEYCLOAK:
         realm = spec.idp.realm
         return IdpCtx(
             type=IdpType.KEYCLOAK,
             enabled=True,
+            auth_plugin="openid-connect",
+            ldap=None,
             realm=realm,
             issuer=f"http://keycloak:8080/realms/{realm}",
             client_id=f"{spec.customer}-client",
@@ -312,6 +397,8 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpC
         return IdpCtx(
             type=IdpType.ENTRA_ID,
             enabled=True,
+            auth_plugin="openid-connect",
+            ldap=None,
             realm=None,
             issuer=f"https://login.microsoftonline.com/{tenant}/v2.0",
             client_id=deck_env.ref("AZURE_CLIENT_ID"),
@@ -323,9 +410,29 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpC
             test_username=None,
             test_password=None,
         )
+    if spec.idp.type is IdpType.LDAP:
+        ldap = _build_ldap(spec, ports)
+        return IdpCtx(
+            type=IdpType.LDAP,
+            enabled=True,
+            auth_plugin="ldap-auth-advanced",
+            ldap=ldap,
+            realm=None,
+            issuer=None,
+            client_id=None,
+            client_secret=None,
+            service_name="lldap",
+            public_client_id=None,
+            token_endpoint=None,
+            # スモークは先頭のユーザーで通す
+            test_username=ldap.users[0].name,
+            test_password=ldap.users[0].password,
+        )
     return IdpCtx(
         type=IdpType.NONE,
         enabled=False,
+        auth_plugin=None,
+        ldap=None,
         realm=None,
         issuer=None,
         client_id=None,
@@ -431,6 +538,8 @@ def _build_services(spec: EnvSpec) -> list[str]:
         services.append("pgvector")
     if spec.idp.type is IdpType.KEYCLOAK:
         services.append("keycloak")
+    if spec.idp.type is IdpType.LDAP:
+        services += ["lldap", "lldap-bootstrap"]
     if spec.observability.otel_lgtm:
         services.append("otel-lgtm")
     return services
@@ -468,6 +577,10 @@ def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
         env["KEYCLOAK_ADMIN"] = "admin"
         env["KEYCLOAK_ADMIN_PASSWORD"] = "admin"
         env["KEYCLOAK_CLIENT_SECRET"] = KEYCLOAK_CLIENT_SECRET
+    elif spec.idp.type is IdpType.LDAP:
+        env["LLDAP_ADMIN_USERNAME"] = LLDAP_ADMIN_NAME
+        env["LLDAP_ADMIN_PASSWORD"] = LLDAP_ADMIN_PASSWORD
+        env["LLDAP_JWT_SECRET"] = LLDAP_JWT_SECRET
     elif spec.idp.type is IdpType.ENTRA_ID:
         env["AZURE_TENANT_ID"] = ""
         env["AZURE_CLIENT_ID"] = ""

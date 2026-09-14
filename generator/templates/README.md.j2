@@ -8,14 +8,14 @@
 |---|---|
 | Gateway | {{ spec.gateway.value }} |
 | Control Plane | {{ spec.control_plane.value }}{% if spec.control_plane.value == 'konnect' %}（{{ kong.cp_name }} / {{ kong.konnect_domain }}）{% endif %} |
-| IdP | {{ spec.idp.type.value }}{% if idp.realm %}（realm: {{ idp.realm }}）{% endif %} |
+| IdP | {{ spec.idp.type.value }}{% if idp.realm %}（realm: {{ idp.realm }}）{% endif %}{% if idp.ldap %}（lldap / {{ idp.ldap.base_dn }}）{% endif %} |
 | キャッシュ | {{ spec.cache.type.value }} |
 | ベクトル DB | {{ spec.vectordb.type.value }} |
 | Observability | {{ 'otel-lgtm' if otel.enabled else 'なし' }} |
 
 ## 前提
 
-必要なツールは docker、mise{% if spec.gateway.value == 'ai-gateway-v2' or spec.control_plane.value == 'konnect' %}、kongctl{% else %}、deck{% endif %} です。
+必要なツールは docker、mise{% if spec.control_plane.value == 'konnect' %}、kongctl{% endif %}{% if spec.gateway.value != 'ai-gateway-v2' %}、deck{% endif %} です。
 
 `.env` の次の項目を埋めてから起動してください。
 
@@ -28,23 +28,25 @@
 ## 初手
 
 {% if spec.control_plane.value == 'konnect' %}
+クラスタ証明書（`{{ certs.crt_path }}`）と秘密鍵は generator がローカルで作成済みです。`mise run sync` は `config/kongctl.yaml` を読み、{% if spec.gateway.value == 'ai-gateway-v2' %}AI Gateway{% else %}Control Plane{% endif %}の作成と、この証明書の登録を行います。{% if spec.gateway.value != 'ai-gateway-v2' %}続けて kongctl の decK 連携で `config/kong/kong.yaml` の Gateway 設定を適用します。{% endif %}秘密鍵はローカルの Data Plane で使用します。
+
 ```bash
 # Konnect の Personal Access Token を発行し（Konnect > 右上のアカウント > Personal Access Tokens）、.env の KONNECT_PAT に書く
-mise run certs                      # {{ certs.dir }}/{{ certs.basename }}.{crt,key} を生成
-# Konnect で {{ kong.cp_name }} を作成し、{{ certs.crt_path }} を登録する
-# 発行された Control Plane ID を .env の CONTROL_PLANE_ID に書く
-mise run up
-mise run sync
-mise run smoke
+mise run setup                     # {{ kong.cp_name }} を作成し、CONTROL_PLANE_ID を .env に書いて環境を起動する
+mise run smoke                     # Data Plane が Konnect に繋がるまで数十秒かかる
 ```
+
+`mise run setup` は `{{ certs.crt_path }}` が無ければ作り、`mise run sync` 相当を実行し、作成された Control Plane のエンドポイントから `CONTROL_PLANE_ID` を取り出して `.env` の該当行を書き換えてから `docker compose up -d` します。個別に叩きたいときは `mise run diff` で作成内容を確認し、`mise run sync` と `mise run up` を分けて実行できます。
 {% else %}
+`config/kongctl.yaml` は同梱されますが、Konnect リソースは定義しません。Control Plane は `compose.yaml` で起動し、`mise run sync` は decK で `config/kong/kong.yaml` を適用します。
+
 ```bash
-mise run certs                      # {{ certs.dir }}/{{ certs.basename }}.{crt,key} を生成
 # .env の KONG_LICENSE_DATA に Kong Enterprise のライセンス JSON を 1 行で入れる
-mise run up
-mise run sync
+mise run setup                      # 証明書を用意して環境を起動し、Admin API が開いてから設定を適用する
 mise run smoke
 ```
+
+`mise run setup` は `{{ certs.dir }}/{{ certs.basename }}.crt` が無ければ作り、`docker compose up -d` の後に Admin API が応答するまで待ってから `mise run sync` 相当を実行します。
 {% endif %}
 
 ## エンドポイント
@@ -60,8 +62,12 @@ mise run smoke
 {% if otel.enabled %}
 | Grafana | http://localhost:{{ ports.grafana }} |
 {% endif %}
-{% if idp.service_name %}
+{% if idp.type.value == 'keycloak' %}
 | Keycloak | http://localhost:{{ ports.keycloak }} |
+{% endif %}
+{% if idp.ldap %}
+| lldap 管理 UI | http://localhost:{{ ports.lldap_web }} |
+| LDAP | localhost:{{ ports.ldap }} |
 {% endif %}
 {% if 'cache' in ports %}
 | Redis | localhost:{{ ports.cache }} |
@@ -72,11 +78,23 @@ mise run smoke
 {% if upstream.enabled %}
 | httpbin（直接） | http://localhost:{{ ports.httpbin }} |
 {% endif %}
+{% if idp.ldap %}
+
+## LDAP のユーザー
+
+`config/lldap/` の内容を `lldap-bootstrap` が投入します。変更するときは `env.yaml` の `idp.users[]` を編集して再生成してください。
+
+| ユーザー | パスワード | 所属グループ |
+|---|---|---|
+{% for user in idp.ldap.users %}
+| {{ user.name }} | {{ user.password }} | {{ user.groups | join('、') if user.groups else 'なし' }} |
+{% endfor %}
+{% endif %}
 
 ## トラブルシュート
 
 {% if spec.control_plane.value == 'konnect' %}
-**データプレーンが Konnect に繋がらない。** `{{ certs.crt_path }}` を Konnect の Control Plane に登録し忘れている場合がほとんどです。クラスタ証明書を再生成したときは登録もやり直す必要があります。
+**データプレーンが Konnect に繋がらない。** `mise run sync` が成功し、`{{ certs.crt_path }}` が Konnect に登録されているか確認してください。クラスタ証明書を `mise run certs` で再生成したときは、`mise run sync` で再登録してから `docker compose restart` で Data Plane に証明書を読み直させてください。
 
 **`CONTROL_PLANE_ID` が空のまま起動した。** `KONG_CLUSTER_CONTROL_PLANE` が `.{{ kong.konnect_domain }}:443` という形になり、名前解決に失敗します。`.env` を埋めて `mise run reset` してください。
 {% else %}
@@ -84,9 +102,19 @@ mise run smoke
 
 **ライセンスエラーが出る。** `.env` の `KONG_LICENSE_DATA` に Kong Enterprise のライセンス JSON を 1 行で入れてください。改行が入っていると読めません。
 {% endif %}
-{% if idp.service_name %}
+{% if idp.type.value == 'keycloak' %}
 
 **ブラウザで Keycloak の管理コンソールを開くと動作がおかしい。** `KC_HOSTNAME` を Kong がコンテナ内で検証する issuer（`{{ idp.issuer }}`）に合わせて固定しているため、`http://localhost:{{ ports.keycloak }}` 経由でアクセスしてもページ内のリンクや API 呼び出しは `keycloak:8080` 宛てになります。ブラウザ（ホスト側）はこのホスト名を解決できないため、管理コンソールや認可コードフローをブラウザで直接使いたい場合は `/etc/hosts` に `127.0.0.1 keycloak` を追記してください。`direct access grants`（パスワードグラント）でトークンを取得するだけなら、`http://localhost:{{ ports.keycloak }}` 経由でも発行されるトークンの issuer は Kong の設定と一致するため、この追記は不要です。
+{% endif %}
+{% if idp.ldap %}
+
+**LDAP 認証の通し方。** `ldap-auth-advanced` は `Authorization: Basic` を見るので、`curl -u {{ idp.test_username }}:{{ idp.test_password }}` で通ります。bind は `{{ idp.ldap.bind_dn }}` で行い、`{{ idp.ldap.users_dn }}` を `{{ idp.ldap.attribute }}` で検索します。lldap の管理 UI には `{{ idp.ldap.admin_name }}` / `.env` の `LLDAP_ADMIN_PASSWORD` でログインできます。
+
+**テストユーザーが存在しない。** `lldap-bootstrap` は `config/lldap/` の JSON を投入する使い捨てのコンテナで、`lldap` が healthy になってから 1 度だけ走ります。`docker compose logs lldap-bootstrap` を確認してください。このスクリプトは実行時に `jq` と `jo` を apk で取得するため、起動時にネットワークが必要です。投入内容を変えたときは `docker compose up -d --force-recreate lldap-bootstrap` で流し直せます。
+
+**認証は通るのに Consumer が付かない。** `consumer_optional: true` にしてあるため、`config/kong/kong.yaml` の `consumers` に無いユーザーでもリクエストは通ります。`env.yaml` の `idp.users[]` に足せば Consumer も一緒に生成されます。
+
+**グループでアクセスを分けたい。** `ldap-auth-advanced` は認証したユーザーの LDAP グループを ACL に載せるので、`config/kong/kong.yaml` のルートに `acl` プラグインを足し、`allow` に `{{ idp.ldap.groups | join('` や `') }}` を並べれば経路ごとに通すグループを絞れます。どのグループをどの経路に許すかは構成ごとの判断なので、generator では生成していません。
 {% endif %}
 {% if vector.enabled and vector.type.value == 'redis-stack' %}
 

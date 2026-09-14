@@ -84,3 +84,10 @@ def test_conflict_raises_with_actionable_message(monkeypatch):
     assert "8000" in str(e.value)
     assert "proxy" in str(e.value)
     assert "keycloak" in str(e.value)
+
+
+def test_ldap_adds_both_lldap_ports():
+    ports = allocate_ports(spec_from(idp={"type": "ldap"}))
+    assert ports["ldap"] == 3890
+    assert ports["lldap_web"] == 17170
+    assert "keycloak" not in ports

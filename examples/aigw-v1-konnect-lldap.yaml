@@ -1,0 +1,32 @@
+customer: acme
+gateway: ai-gateway-v1
+control_plane: konnect
+
+ai:
+  providers:
+    - type: azure
+      instance: acme-foundry
+      auth: api-key
+      models:
+        - name: gpt-5-6
+          deployment_id: gpt-5.6
+          api_version: 2024-12-01-preview
+
+idp:
+  type: ldap
+  users:
+    - name: developer
+      email: developer@example.com
+      groups:
+        - developer-dep
+    - name: researcher
+      email: researcher@example.com
+      groups:
+        - developer-dep
+        - researcher-dep
+
+cache:
+  type: none
+
+vectordb:
+  type: none

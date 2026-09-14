@@ -1,5 +1,7 @@
 import tomllib
 
+import pytest
+
 from generator.render import render_all
 from tests.conftest import AZURE_PROVIDER, ctx_for
 
@@ -17,7 +19,7 @@ def test_all_configurations_emit_the_same_top_level_files():
 def test_mise_is_valid_toml_with_expected_tasks():
     doc = tomllib.loads(render_all(ctx_for())["mise.toml"])
     tasks = {name.removeprefix("tasks.") for name in doc["tasks"]}
-    assert tasks == {"up", "down", "reset", "certs", "sync", "diff", "logs", "smoke"}
+    assert tasks == {"up", "down", "reset", "certs", "setup", "sync", "diff", "logs", "smoke"}
 
 
 def test_mise_loads_dotenv():
@@ -28,7 +30,9 @@ def test_mise_loads_dotenv():
 def test_sync_uses_kongctl_for_konnect_ai_gateway_v2():
     ctx = ctx_for(gateway="ai-gateway-v2", ai={"providers": [AZURE_PROVIDER]})
     doc = tomllib.loads(render_all(ctx)["mise.toml"])
-    assert "kongctl sync konnect -f config/kongctl.yaml --auto-approve" in doc["tasks"]["sync"]["run"]
+    run = doc["tasks"]["sync"]["run"]
+    assert "kongctl sync konnect -f config/kongctl.yaml" in run
+    assert "--auto-approve" in run
 
 
 def test_sync_uses_deck_for_self_managed():
@@ -80,24 +84,40 @@ def test_smoke_task_is_valid_shell():
         assert result.returncode == 0, result.stderr
 
 
-def test_sync_uses_deck_for_konnect_when_the_config_is_deck_format():
-    # kong.yaml は _format_version の decK 形式で、kongctl のリソース形式ではない
-    for gateway, ai in (("api-gateway", {}), ("ai-gateway-v1", {"providers": [AZURE_PROVIDER]})):
-        ctx = ctx_for(gateway=gateway, control_plane="konnect", **({"ai": ai} if ai else {}))
+def test_konnect_tasks_use_kongctl_with_the_declared_region_and_certificate_boundary():
+    for gateway in ("api-gateway", "ai-gateway-v1", "ai-gateway-v2"):
+        ctx = ctx_for(gateway=gateway, region="eu", ai={"providers": [AZURE_PROVIDER]})
         doc = tomllib.loads(render_all(ctx)["mise.toml"])
         for task in ("sync", "diff"):
             run = doc["tasks"][task]["run"]
-            assert run.split()[0:3] != ["kongctl", task, "konnect"], run
-            assert "deck gateway " + task in run
-            assert f"--konnect-control-plane-name {ctx.kong.cp_name}" in run
-            assert "$KONNECT_PAT" in run
-            assert f"--konnect-addr {ctx.kong.konnect_api_url}" in run
+            assert f"kongctl {task} konnect -f config/kongctl.yaml" in run
+            assert '--pat "$KONNECT_PAT"' in run
+            assert "--base-url https://eu.api.konghq.com" in run
+            assert "--base-dir ." in run
+            assert "config/kong/kong.yaml" not in run
 
 
 def test_deck_tasks_export_the_prefixed_environment_variables():
     ctx = ctx_for(gateway="ai-gateway-v1", ai={"providers": [AZURE_PROVIDER]})
-    run = tomllib.loads(render_all(ctx)["mise.toml"])["tasks"]["sync"]["run"]
-    assert run.startswith('DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" deck gateway sync')
+    tasks = tomllib.loads(render_all(ctx)["mise.toml"])["tasks"]
+    for task in ("sync", "diff"):
+        assert tasks[task]["run"].startswith('DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" ')
+
+
+def test_konnect_readme_bootstraps_with_existing_local_certificates_before_starting():
+    for gateway in ("api-gateway", "ai-gateway-v1", "ai-gateway-v2"):
+        files = render_all(ctx_for(gateway=gateway, ai={"providers": [AZURE_PROVIDER]}))
+        body = files["README.md"]
+        first_steps = body.split("## 初手")[1].split("## エンドポイント")[0]
+        assert first_steps.index("mise run sync") < first_steps.index("mise run up")
+        assert "mise run certs" not in first_steps
+        assert "config/kongctl.yaml" in first_steps
+        assert "ローカルで作成済み" in first_steps
+        tools = body.split("必要なツールは ")[1].split(" です。")[0].split("、")
+        assert "kongctl" in tools
+        assert ("deck" in tools) == (gateway != "ai-gateway-v2")
+        certs_task = tomllib.loads(files["mise.toml"])["tasks"]["certs"]["run"]
+        assert "mise run sync" in certs_task
 
 
 def test_konnect_environment_has_a_pat_slot_and_readme_says_where_to_get_it():
@@ -188,3 +208,21 @@ def test_readme_has_no_hard_wrapped_paragraphs():
         stripped = line.strip()
         if stripped.endswith("、") or stripped.endswith("し、"):
             raise AssertionError(f"段落が途中で改行されています: {line}")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"idp": {"type": "ldap"}, "cache": {"type": "redis"}},
+        {"idp": {"type": "keycloak", "realm": "acme"}, "cache": {"type": "redis"}},
+        {"cache": {"type": "redis"}},
+    ],
+    ids=["ldap", "keycloak", "none"],
+)
+def test_readme_endpoint_table_is_not_split_by_a_blank_line(overrides):
+    # 条件分岐で行を足すとき、表の途中に空行を残すと以降の行が表から外れる
+    body = render_all(ctx_for(**overrides))["README.md"]
+    table = body.split("## エンドポイント", 1)[1].split("##", 1)[0]
+    rows = [line for line in table.strip().splitlines() if line.strip()]
+    assert len(rows) == len(table.strip().splitlines()), table
+    assert all(row.startswith("|") for row in rows), table

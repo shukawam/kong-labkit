@@ -212,3 +212,55 @@ def test_semantic_cache_pgvector_block_carries_credentials():
     assert pgvector["database"] == ctx.vector.database
     assert pgvector["user"] == ctx.vector.user
     assert pgvector["password"] == ctx.vector.password
+
+
+def test_ldap_auth_advanced_binds_as_the_lldap_admin():
+    ctx = ctx_for(idp={"type": "ldap"})
+    doc = kong_yaml_of(ctx)
+    plugin = next(p for p in doc["services"][0]["plugins"] if p["name"] == "ldap-auth-advanced")
+    config = plugin["config"]
+    assert config["ldap_host"] == "lldap"
+    assert config["ldap_port"] == 3890
+    assert config["base_dn"] == "ou=people,dc=acme,dc=local"
+    assert config["bind_dn"] == "cn=admin,ou=people,dc=acme,dc=local"
+    assert config["ldap_password"] == "local-dev-password"
+    assert config["attribute"] == "uid"
+
+
+def test_ldap_auth_advanced_maps_groups_to_consumers():
+    doc = kong_yaml_of(ctx_for(idp={"type": "ldap"}))
+    config = next(
+        p for p in doc["services"][0]["plugins"] if p["name"] == "ldap-auth-advanced"
+    )["config"]
+    assert config["consumer_by"] == ["username"]
+    assert config["consumer_optional"] is True
+    assert config["group_base_dn"] == "ou=groups,dc=acme,dc=local"
+    assert config["group_member_attribute"] == "member"
+
+
+def test_ldap_declares_a_consumer_per_user():
+    doc = kong_yaml_of(ctx_for(idp={"type": "ldap"}))
+    assert [c["username"] for c in doc["consumers"]] == ["tester"]
+    doc = kong_yaml_of(
+        ctx_for(idp={"type": "ldap", "users": [{"name": "developer"}, {"name": "researcher"}]})
+    )
+    assert [c["username"] for c in doc["consumers"]] == ["developer", "researcher"]
+
+
+def test_non_ldap_configs_declare_no_consumers():
+    assert "consumers" not in kong_yaml_of(ctx_for())
+    assert "consumers" not in kong_yaml_of(ctx_for(idp={"type": "keycloak", "realm": "acme"}))
+
+
+def test_ldap_and_openid_connect_are_mutually_exclusive():
+    ldap = kong_yaml_of(ctx_for(idp={"type": "ldap"}))["services"][0]["plugins"]
+    assert all(p["name"] != "openid-connect" for p in ldap)
+    keycloak = kong_yaml_of(ctx_for(idp={"type": "keycloak", "realm": "acme"}))["services"][0]
+    assert all(p["name"] != "ldap-auth-advanced" for p in keycloak["plugins"])
+
+
+def test_ldap_protects_the_chat_route_on_aigw_v1():
+    ctx = ctx_for(gateway="ai-gateway-v1", idp={"type": "ldap"}, ai={"providers": [AZURE_PROVIDER]})
+    plugins = kong_yaml_of(ctx)["services"][0]["plugins"]
+    assert any(p["name"] == "ldap-auth-advanced" for p in plugins)
+    assert any(p["name"] == "ai-proxy-advanced" for p in plugins)

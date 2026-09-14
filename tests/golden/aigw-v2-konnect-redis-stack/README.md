@@ -25,15 +25,15 @@
 
 ## 初手
 
+クラスタ証明書（`.certs/cluster.crt`）と秘密鍵は generator がローカルで作成済みです。`mise run sync` は `config/kongctl.yaml` を読み、AI Gatewayの作成と、この証明書の登録を行います。秘密鍵はローカルの Data Plane で使用します。
+
 ```bash
 # Konnect の Personal Access Token を発行し（Konnect > 右上のアカウント > Personal Access Tokens）、.env の KONNECT_PAT に書く
-mise run certs                      # .certs/cluster.{crt,key} を生成
-# Konnect で acme-ai-gateway を作成し、.certs/cluster.crt を登録する
-# 発行された Control Plane ID を .env の CONTROL_PLANE_ID に書く
-mise run up
-mise run sync
-mise run smoke
+mise run setup                     # acme-ai-gateway を作成し、CONTROL_PLANE_ID を .env に書いて環境を起動する
+mise run smoke                     # Data Plane が Konnect に繋がるまで数十秒かかる
 ```
+
+`mise run setup` は `.certs/cluster.crt` が無ければ作り、`mise run sync` 相当を実行し、作成された Control Plane のエンドポイントから `CONTROL_PLANE_ID` を取り出して `.env` の該当行を書き換えてから `docker compose up -d` します。個別に叩きたいときは `mise run diff` で作成内容を確認し、`mise run sync` と `mise run up` を分けて実行できます。
 
 ## エンドポイント
 
@@ -46,7 +46,7 @@ mise run smoke
 
 ## トラブルシュート
 
-**データプレーンが Konnect に繋がらない。** `.certs/cluster.crt` を Konnect の Control Plane に登録し忘れている場合がほとんどです。クラスタ証明書を再生成したときは登録もやり直す必要があります。
+**データプレーンが Konnect に繋がらない。** `mise run sync` が成功し、`.certs/cluster.crt` が Konnect に登録されているか確認してください。クラスタ証明書を `mise run certs` で再生成したときは、`mise run sync` で再登録してから `docker compose restart` で Data Plane に証明書を読み直させてください。
 
 **`CONTROL_PLANE_ID` が空のまま起動した。** `KONG_CLUSTER_CONTROL_PLANE` が `.us.cp.konghq.com:443` という形になり、名前解決に失敗します。`.env` を埋めて `mise run reset` してください。
 

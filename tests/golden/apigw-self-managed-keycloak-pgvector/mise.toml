@@ -24,6 +24,30 @@ openssl req -new -x509 -nodes -newkey rsa:2048 \
 chmod 600 config/kong/certs/tls.key
 '''
 
+[tasks.setup]
+description = "証明書の用意から環境の起動までを通しで行う"
+run = '''
+set -euo pipefail
+
+if [ ! -f config/kong/certs/tls.crt ]; then
+  mise run certs
+fi
+
+docker compose up -d
+
+# ローカルの Control Plane は Admin API が開くまで sync を受け付けない
+for _ in $(seq 1 60); do
+  if curl -sS -o /dev/null http://localhost:8001/status; then
+    break
+  fi
+  sleep 2
+done
+
+deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:8001
+
+echo "起動しました。mise run smoke で疎通を確認してください。"
+'''
+
 [tasks.sync]
 description = "宣言的設定を適用する"
 run = 'deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:8001'

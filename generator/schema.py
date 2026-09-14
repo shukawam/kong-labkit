@@ -26,6 +26,7 @@ class ControlPlane(StrEnum):
 class IdpType(StrEnum):
     KEYCLOAK = "keycloak"
     ENTRA_ID = "entra-id"
+    LDAP = "ldap"
     NONE = "none"
 
 
@@ -85,9 +86,17 @@ class AiSpec(Strict):
     embedding_model: str = "text-embedding-3-large"
 
 
+class LdapUser(Strict):
+    name: str
+    email: str | None = None
+    password: str | None = None
+    groups: list[str] = Field(default_factory=list)
+
+
 class IdpSpec(Strict):
     type: IdpType = IdpType.NONE
     realm: str | None = None
+    users: list[LdapUser] = Field(default_factory=list)
 
 
 class CacheSpec(Strict):
@@ -107,6 +116,8 @@ class EnvSpec(Strict):
     target: Target = Target.COMPOSE
     gateway: Gateway
     control_plane: ControlPlane = ControlPlane.KONNECT
+    # Konnect 上の見せ方だけを customer から切り離すための上書き
+    konnect_name: str | None = None
     region: str = "us"
     ai: AiSpec = Field(default_factory=AiSpec)
     idp: IdpSpec = Field(default_factory=IdpSpec)
@@ -184,6 +195,43 @@ class EnvSpec(Strict):
             raise ValueError(
                 "idp.type: keycloak のときは idp.realm を指定してください"
                 "（realm 名が issuer URL と realm-export.json の両方に入ります）。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_konnect_name(self):
+        if self.konnect_name and self.control_plane is not ControlPlane.KONNECT:
+            raise ValueError(
+                "konnect_name は control_plane: konnect のときだけ指定できます"
+                "（self-managed には Konnect の Control Plane が存在せず、指定しても効きません）。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_ldap_users(self):
+        if self.idp.users and self.idp.type is not IdpType.LDAP:
+            raise ValueError(
+                "idp.users は idp.type: ldap のときだけ指定できます"
+                f"（いまは idp.type: {self.idp.type.value} で、この一覧はどこにも出ません）。"
+            )
+        seen: set[str] = set()
+        for user in self.idp.users:
+            if user.name in seen:
+                raise ValueError(
+                    f"idp.users の name が重複しています: {user.name}"
+                    "（LDAP のユーザー名と Kong の Consumer 名の両方になるため、一意にしてください）。"
+                )
+            seen.add(user.name)
+        return self
+
+    @model_validator(mode="after")
+    def _check_ldap_needs_a_kong_yaml(self):
+        if self.idp.type is IdpType.LDAP and self.gateway is Gateway.AI_GATEWAY_V2:
+            raise ValueError(
+                "idp.type: ldap は ai-gateway-v2 では使えません"
+                "（v2 の設定は config/kongctl.yaml の AI Gateway エンティティだけで、"
+                "プラグインを書く経路が generator にありません）。"
+                "gateway: ai-gateway-v1 か api-gateway にしてください。"
             )
         return self
 

@@ -49,6 +49,9 @@ def render_all(ctx: Ctx) -> dict[str, str]:
         ".env.example": env.get_template("env.j2").render(blank=True, **variables),
         ".gitignore": env.get_template("gitignore.j2").render(**variables),
         "docs/.gitkeep": "",
+        "config/kongctl.yaml": env.get_template("config/kongctl.yaml.j2").render(
+            **variables
+        ),
     }
     if ctx.vector.enabled and ctx.vector.type.value == "pgvector":
         files["config/pgvector/init.sql"] = "CREATE EXTENSION IF NOT EXISTS vector;\n"
@@ -56,10 +59,13 @@ def render_all(ctx: Ctx) -> dict[str, str]:
         files["config/keycloak/realm-export.json"] = env.get_template(
             "config/realm-export.json.j2"
         ).render(**variables)
-    if ctx.spec.gateway.value == "ai-gateway-v2":
-        files["config/kongctl.yaml"] = env.get_template("config/kongctl.yaml.j2").render(
-            **variables
-        )
+    if ctx.idp.type.value == "ldap":
+        files["config/lldap/group-configs/groups.json"] = env.get_template(
+            "config/lldap-groups.json.j2"
+        ).render(**variables)
+        files["config/lldap/user-configs/users.json"] = env.get_template(
+            "config/lldap-users.json.j2"
+        ).render(**variables)
     if ctx.spec.gateway.value in ("ai-gateway-v1", "api-gateway"):
         files["config/kong/kong.yaml"] = env.get_template("config/kong.yaml.j2").render(
             **variables

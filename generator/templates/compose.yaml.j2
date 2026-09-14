@@ -28,3 +28,8 @@ services:
 {% include 'services/' ~ service ~ '.yaml.j2' %}
 {% endfilter %}
 {% endfor %}
+{% if idp.type.value == 'ldap' %}
+
+volumes:
+  lldap-data:
+{% endif %}

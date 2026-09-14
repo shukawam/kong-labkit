@@ -23,13 +23,15 @@
 
 ## 初手
 
+`config/kongctl.yaml` は同梱されますが、Konnect リソースは定義しません。Control Plane は `compose.yaml` で起動し、`mise run sync` は decK で `config/kong/kong.yaml` を適用します。
+
 ```bash
-mise run certs                      # config/kong/certs/tls.{crt,key} を生成
 # .env の KONG_LICENSE_DATA に Kong Enterprise のライセンス JSON を 1 行で入れる
-mise run up
-mise run sync
+mise run setup                      # 証明書を用意して環境を起動し、Admin API が開いてから設定を適用する
 mise run smoke
 ```
+
+`mise run setup` は `config/kong/certs/tls.crt` が無ければ作り、`docker compose up -d` の後に Admin API が応答するまで待ってから `mise run sync` 相当を実行します。
 
 ## エンドポイント
 

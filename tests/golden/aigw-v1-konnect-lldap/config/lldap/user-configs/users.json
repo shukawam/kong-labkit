@@ -1,0 +1,19 @@
+{
+  "id": "developer",
+  "email": "developer@example.com",
+  "password": "developer-password",
+  "displayName": "developer",
+  "groups": [
+    "developer-dep"
+  ]
+}
+{
+  "id": "researcher",
+  "email": "researcher@example.com",
+  "password": "researcher-password",
+  "displayName": "researcher",
+  "groups": [
+    "developer-dep",
+    "researcher-dep"
+  ]
+}

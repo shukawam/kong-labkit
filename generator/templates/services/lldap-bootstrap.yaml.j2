@@ -1,0 +1,17 @@
+lldap-bootstrap:
+  <<: *default
+  container_name: lldap-bootstrap
+  image: {{ idp.ldap.image }}
+  # x-default の on-failure のままだと、投入が終わった後も延々と再実行される
+  restart: "no"
+  # イメージには入っているが entrypoint からは呼ばれないので、使い捨てのジョブとして直接叩く
+  entrypoint: ["/app/bootstrap.sh"]
+  environment:
+    LLDAP_URL: http://{{ idp.ldap.host }}:17170
+    LLDAP_ADMIN_USERNAME: ${LLDAP_ADMIN_USERNAME:-{{ idp.ldap.admin_name }}}
+    LLDAP_ADMIN_PASSWORD: ${LLDAP_ADMIN_PASSWORD:-{{ idp.ldap.bind_password }}}
+  volumes:
+    - ./config/lldap:/bootstrap:ro
+  depends_on:
+    lldap:
+      condition: service_healthy

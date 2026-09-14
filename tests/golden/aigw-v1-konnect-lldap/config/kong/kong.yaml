@@ -1,0 +1,66 @@
+_format_version: "3.0"
+
+services:
+  - name: llm
+    # ai-proxy-advanced が上流を差し替えるが、service には URL が必須なので捨て値を置く
+    url: http://localhost:32000
+    routes:
+      - name: chat
+        paths:
+          - /v1/chat/completions
+        methods:
+          - POST
+        strip_path: false
+        # 省略すると平文 HTTP が 426 で弾かれる（decK/Kong のルート protocols 既定値は https のみ）
+        protocols:
+          - http
+          - https
+    plugins:
+      - name: ai-proxy-advanced
+        config:
+          targets:
+            - route_type: llm/v1/chat
+              auth:
+                header_name: api-key
+                header_value: '${{ env "DECK_AZURE_OPENAI_API_KEY" }}'
+              model:
+                provider: azure
+                name: gpt-5-6
+                options:
+                  azure_instance: acme-foundry
+                  azure_deployment_id: gpt-5.6
+                  azure_api_version: "2024-12-01-preview"
+      - name: ldap-auth-advanced
+        config:
+          ldap_host: lldap
+          ldap_port: 3890
+          # 検索してから bind するので、ユーザーの DN を組み立てる必要がない
+          bind_dn: cn=admin,ou=people,dc=acme,dc=local
+          ldap_password: local-dev-password
+          base_dn: ou=people,dc=acme,dc=local
+          attribute: uid
+          # lldap は平文 LDAP のみを listen する
+          ldaps: false
+          start_tls: false
+          verify_ldap_host: false
+          cache_ttl: 60
+          # Consumer が無いユーザーも通す。認証と Consumer 割り当てを別々に試せる
+          consumer_optional: true
+          consumer_by:
+            - username
+          group_base_dn: ou=groups,dc=acme,dc=local
+          group_name_attribute: cn
+          group_member_attribute: member
+
+# ldap-auth-advanced の consumer_by が突き合わせる先。LDAP の認証成功だけでは Consumer は生えない
+consumers:
+  - username: developer
+  - username: researcher
+
+plugins:
+  - name: opentelemetry
+    config:
+      traces_endpoint: http://otel-lgtm:4318/v1/traces
+      logs_endpoint: http://otel-lgtm:4318/v1/logs
+      resource_attributes:
+        service.name: acme-ai-gateway

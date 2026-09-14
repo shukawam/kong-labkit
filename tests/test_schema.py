@@ -89,6 +89,51 @@ def test_keycloak_without_realm_is_rejected():
     assert "idp.realm を指定してください" in str(e.value)
 
 
+def test_ldap_is_rejected_for_ai_gateway_v2():
+    with pytest.raises(ValidationError) as e:
+        spec_from(gateway="ai-gateway-v2", idp={"type": "ldap"})
+    assert "idp.type: ldap は ai-gateway-v2 では使えません" in str(e.value)
+    assert "gateway: ai-gateway-v1" in str(e.value)
+
+
+@pytest.mark.parametrize("gateway", ["ai-gateway-v1", "api-gateway"])
+def test_ldap_needs_no_realm(gateway):
+    spec = spec_from(gateway=gateway, idp={"type": "ldap"})
+    assert spec.idp.realm is None
+    assert spec.warnings() == []
+
+
+def test_ldap_users_are_rejected_for_other_idps():
+    with pytest.raises(ValidationError) as e:
+        spec_from(idp={"type": "keycloak", "realm": "acme", "users": [{"name": "developer"}]})
+    assert "idp.users は idp.type: ldap のときだけ指定できます" in str(e.value)
+
+
+def test_ldap_rejects_duplicate_user_names():
+    with pytest.raises(ValidationError) as e:
+        spec_from(
+            idp={
+                "type": "ldap",
+                "users": [{"name": "developer"}, {"name": "developer"}],
+            }
+        )
+    assert "idp.users の name が重複しています: developer" in str(e.value)
+
+
+def test_ldap_users_are_optional():
+    assert spec_from(idp={"type": "ldap"}).idp.users == []
+
+
+def test_konnect_name_defaults_to_unset():
+    assert spec_from().konnect_name is None
+
+
+def test_konnect_name_is_rejected_for_self_managed():
+    with pytest.raises(ValidationError) as e:
+        spec_from(control_plane="self-managed", konnect_name="bluesky")
+    assert "konnect_name は control_plane: konnect のときだけ指定できます" in str(e.value)
+
+
 @pytest.mark.parametrize("target", ["kubernetes", "cloud-run", "aca"])
 def test_unsupported_targets_are_rejected(target):
     with pytest.raises(ValidationError) as e:

@@ -22,16 +22,53 @@ openssl req -new -x509 -nodes -newkey rsa:2048 \
   -addext "subjectAltName=DNS:acme-ai-gateway" \
   -keyout .certs/cluster.key -out .certs/cluster.crt -days 1095
 chmod 600 .certs/cluster.key
-echo "生成しました。Konnect の Control Plane に .certs/cluster.crt を登録してください。"
+echo "生成しました。mise run sync で .certs/cluster.crt を Konnect に登録し、mise run up で環境を起動してください。起動済みの場合は docker compose restart で証明書を読み直してください。"
+'''
+
+[tasks.setup]
+description = "証明書の用意から環境の起動までを通しで行う"
+run = '''
+set -euo pipefail
+
+if [ ! -f .certs/cluster.crt ]; then
+  mise run certs
+fi
+
+DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve
+
+# --columns はヘッダ 1 行と値 1 行を返すので、jq を足さずに最終行だけ取る
+endpoint=$(kongctl get konnect gateway control-planes acme-ai-gateway --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --columns 'EP=.config.control_plane_endpoint' | tail -n 1)
+cp_id=${endpoint#https://}
+cp_id=${cp_id%%.*}
+if [ -z "$cp_id" ]; then
+  echo "acme-ai-gateway のエンドポイントを取得できませんでした。mise run sync が成功しているか確認してください。" >&2
+  exit 1
+fi
+
+# .env には API キーも入っている。想定外の形なら追記せずに止める
+if ! grep -q '^CONTROL_PLANE_ID=' .env; then
+  echo ".env に CONTROL_PLANE_ID の行がありません。CONTROL_PLANE_ID=\"$cp_id\" を手で追記してください。" >&2
+  exit 1
+fi
+tmp=$(mktemp ./.env.XXXXXX)
+trap 'rm -f "$tmp"' EXIT
+sed 's|^CONTROL_PLANE_ID=.*|CONTROL_PLANE_ID="'"$cp_id"'"|' .env > "$tmp"
+mv "$tmp" .env
+trap - EXIT
+echo "CONTROL_PLANE_ID=$cp_id を .env に反映しました。"
+
+docker compose up -d
+
+echo "起動しました。mise run smoke で疎通を確認してください。"
 '''
 
 [tasks.sync]
 description = "宣言的設定を適用する"
-run = 'DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" deck gateway sync config/kong/kong.yaml --konnect-token "$KONNECT_PAT" --konnect-addr https://us.api.konghq.com --konnect-control-plane-name acme-ai-gateway'
+run = 'DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve'
 
 [tasks.diff]
 description = "宣言的設定の差分を見る"
-run = 'DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" deck gateway diff config/kong/kong.yaml --konnect-token "$KONNECT_PAT" --konnect-addr https://us.api.konghq.com --konnect-control-plane-name acme-ai-gateway'
+run = 'DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT"'
 
 [tasks.logs]
 description = "ログを追う。サービス名を引数で渡せる"

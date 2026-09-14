@@ -10,6 +10,10 @@
 
 あわせて、AI Gateway v2 の kongctl テンプレートは bedrock と vertex が `auth: type: <provider>` に落ち、資格情報を一切出さない。この 2 プロバイダを v2 で使う構成は現状では動かない。
 
+### `idp.type: ldap` が AI Gateway v2 で使えない
+
+`ai-gateway-v2` の生成物は `config/kongctl.yaml` の AI Gateway エンティティだけで、Kong のプラグインを書く経路が generator に無い。そのため `idp.type: ldap` は schema で v2 を弾いている。v2 でも認証を掛けるには、kongctl テンプレートに plugin を出す仕組みを足す必要がある。同じ制約は将来 v2 に `openid-connect` を掛けたくなったときにも出る。
+
 ### `semantic_routing` が AI Gateway v1 で no-op
 
 `gateway: ai-gateway-v1` に `semantic_routing: true` を指定してもスキーマ検証は通り vectordb も起動するが、生成される `config/kong/kong.yaml` には semantic 関連の設定が何も出ない。`ai-proxy-advanced` には `balancer.algorithm: semantic` があるので、そこに配線する余地がある。`semantic_cache` は v1 でも効く。

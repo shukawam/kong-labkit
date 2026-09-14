@@ -262,3 +262,40 @@ def test_every_kong_service_carries_the_same_hardening(
         env = doc["services"][name]["environment"]
         for key, value in HARDENING.items():
             assert env[key] == value, (name, key)
+
+
+def test_lldap_service(compose_of):
+    ctx = ctx_for(idp={"type": "ldap"})
+    doc = compose_of(only_services(ctx, "lldap"))
+    svc = doc["services"]["lldap"]
+    assert svc["image"] == "lldap/lldap:v0.6.3-alpine"
+    assert svc["ports"] == ["3890:3890", "17170:17170"]
+    assert svc["environment"]["LLDAP_LDAP_BASE_DN"] == "dc=acme,dc=local"
+    # entrypoint が書き込めない /data で終了するため、ボリュームは必須
+    assert svc["volumes"] == ["lldap-data:/data"]
+
+
+def test_lldap_named_volume_is_declared(compose_of):
+    doc = compose_of(ctx_for(idp={"type": "ldap"}))
+    assert "lldap-data" in doc["volumes"]
+    assert "volumes" not in compose_of(ctx_for())
+
+
+def test_lldap_bootstrap_is_a_one_shot_job(compose_of):
+    ctx = ctx_for(idp={"type": "ldap"})
+    doc = compose_of(only_services(ctx, "lldap-bootstrap"))
+    svc = doc["services"]["lldap-bootstrap"]
+    assert svc["entrypoint"] == ["/app/bootstrap.sh"]
+    # x-default の on-failure のままだと、投入済みの環境で延々と再実行される
+    assert svc["restart"] == "no"
+    assert svc["volumes"] == ["./config/lldap:/bootstrap:ro"]
+    assert svc["depends_on"]["lldap"]["condition"] == "service_healthy"
+
+
+def test_lldap_bootstrap_uses_the_same_admin_credentials(compose_of):
+    doc = compose_of(only_services(ctx_for(idp={"type": "ldap"}), "lldap", "lldap-bootstrap"))
+    server = doc["services"]["lldap"]["environment"]
+    job = doc["services"]["lldap-bootstrap"]["environment"]
+    assert job["LLDAP_URL"] == "http://lldap:17170"
+    assert job["LLDAP_ADMIN_USERNAME"] == server["LLDAP_LDAP_USER_DN"]
+    assert job["LLDAP_ADMIN_PASSWORD"] == server["LLDAP_LDAP_USER_PASS"]

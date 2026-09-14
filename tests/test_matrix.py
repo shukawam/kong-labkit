@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from generator.context import build_context
 from generator.render import render_all
 from generator.schema import EnvSpec
+from tests.conftest import load_kongctl
 
 AZURE_PROVIDER = {
     "type": "azure",
@@ -21,7 +22,12 @@ AZURE_PROVIDER = {
 
 GATEWAYS = ["ai-gateway-v2", "ai-gateway-v1", "api-gateway"]
 CONTROL_PLANES = ["konnect", "self-managed"]
-IDPS = [{"type": "none"}, {"type": "keycloak", "realm": "acme"}, {"type": "entra-id"}]
+IDPS = [
+    {"type": "none"},
+    {"type": "keycloak", "realm": "acme"},
+    {"type": "entra-id"},
+    {"type": "ldap"},
+]
 CACHES = ["none", "redis", "redis-stack"]
 VECTORDBS = ["none", "redis-stack", "pgvector"]
 
@@ -79,10 +85,12 @@ def test_matrix_is_not_trivially_small():
 @pytest.mark.parametrize("spec", VALID_SPECS, ids=_spec_id)
 def test_every_generated_yaml_parses(spec):
     files = render_all(build_context(spec))
+    assert "config/kongctl.yaml" in files
     for relpath, body in files.items():
         if relpath.endswith((".yaml", ".yml")):
             if relpath == "config/kongctl.yaml":
-                continue  # カスタムタグを含むため test_kongctl.py 側で確認する
+                assert load_kongctl(body) is not None
+                continue
             assert yaml.safe_load(body) is not None, relpath
 
 
@@ -126,7 +134,7 @@ def test_every_mise_toml_parses(spec):
 
     doc = tomllib.loads(render_all(build_context(spec))["mise.toml"])
     assert {name.removeprefix("tasks.") for name in doc["tasks"]} == {
-        "up", "down", "reset", "certs", "sync", "diff", "logs", "smoke"
+        "up", "down", "reset", "certs", "setup", "sync", "diff", "logs", "smoke"
     }
 
 

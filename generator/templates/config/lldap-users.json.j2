@@ -1,0 +1,13 @@
+{% for user in idp.ldap.users %}
+{
+  "id": "{{ user.name }}",
+  "email": "{{ user.email }}",
+  "password": "{{ user.password }}",
+  "displayName": "{{ user.name }}",
+  "groups": [
+{% for group in user.groups %}
+    "{{ group }}"{{ "," if not loop.last }}
+{% endfor %}
+  ]
+}
+{% endfor %}

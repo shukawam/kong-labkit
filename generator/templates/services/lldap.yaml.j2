@@ -1,0 +1,15 @@
+lldap:
+  <<: *default
+  container_name: lldap
+  image: {{ idp.ldap.image }}
+  environment:
+    LLDAP_JWT_SECRET: ${LLDAP_JWT_SECRET:-{{ idp.ldap.jwt_secret }}}
+    LLDAP_LDAP_BASE_DN: {{ idp.ldap.base_dn }}
+    LLDAP_LDAP_USER_DN: ${LLDAP_ADMIN_USERNAME:-{{ idp.ldap.admin_name }}}
+    LLDAP_LDAP_USER_PASS: ${LLDAP_ADMIN_PASSWORD:-{{ idp.ldap.bind_password }}}
+  ports:
+    - {{ ports.ldap }}:3890
+    - {{ ports.lldap_web }}:17170
+  # entrypoint は /data に書き込めないと起動前に終了する
+  volumes:
+    - lldap-data:/data

@@ -1,0 +1,23 @@
+[tasks.generate]
+description = "customer/<顧客名>.yaml から ~/customer/<顧客名> に検証環境を生成する"
+dir = "{{ config_root }}"
+shell = "bash -c"
+usage = '''
+arg "<customer>" help="customer/ 配下の YAML ファイル名（拡張子なし）"
+flag "-o --out <dir>" help="出力先（既定: ~/customer/<顧客名>）"
+flag "--force" help="既存の生成物を更新する（.env、.certs/、docs/ は保護）"
+'''
+run = '''
+set -euo pipefail
+
+customer_name="${usage_customer:?}"
+schema_file="customer/${customer_name}.yaml"
+output_dir="${usage_out:-$HOME/customer/$customer_name}"
+
+args=("$schema_file" --out "$output_dir")
+if [ "${usage_force:-false}" = "true" ]; then
+  args+=(--force)
+fi
+
+exec uv run generator/gen.py "${args[@]}"
+'''

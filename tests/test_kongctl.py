@@ -1,5 +1,10 @@
-import pytest
+from pathlib import Path
 
+import pytest
+import yaml
+from click.testing import CliRunner
+
+from generator.gen import main
 from generator.render import render_all
 from tests.conftest import AZURE_PROVIDER, ctx_for, load_kongctl
 
@@ -16,14 +21,62 @@ def kongctl_of(ctx) -> dict:
     return load_kongctl(render_all(ctx)["config/kongctl.yaml"])
 
 
-def test_emitted_only_for_ai_gateway_v2():
-    assert "config/kongctl.yaml" in render_all(
-        ctx_for(gateway="ai-gateway-v2", ai={"providers": [AZURE_PROVIDER]})
+@pytest.mark.parametrize("gateway", ["api-gateway", "ai-gateway-v1"])
+def test_v1_control_plane_pins_the_local_certificate_and_delegates_to_deck(gateway):
+    ctx = ctx_for(gateway=gateway, ai={"providers": [AZURE_PROVIDER]})
+    doc = kongctl_of(ctx)
+    assert "ai_gateways" not in doc
+    assert len(doc["control_planes"]) == 1
+    cp = doc["control_planes"][0]
+    assert cp["ref"] == cp["name"] == ctx.kong.cp_name
+    assert cp["cluster_type"] == "CLUSTER_TYPE_CONTROL_PLANE"
+    assert cp["auth_type"] == "pinned_client_certs"
+    assert cp["data_plane_certificates"] == [
+        {
+            "ref": f"{ctx.kong.cp_name}-cert",
+            "cert": {"__tag__": "!file", "value": f"../{ctx.certs.crt_path}"},
+        }
+    ]
+    assert cp["_deck"]["files"] == ["kong/kong.yaml"]
+    assert "config/" + cp["_deck"]["files"][0] in render_all(ctx)
+
+
+@pytest.mark.parametrize("gateway", ["api-gateway", "ai-gateway-v1"])
+def test_self_managed_emits_kongctl_without_konnect_resources(gateway):
+    ctx = ctx_for(gateway=gateway, control_plane="self-managed")
+    assert kongctl_of(ctx) == {"_defaults": {"kongctl": {"namespace": "acme"}}}
+
+
+@pytest.mark.parametrize("gateway", ["api-gateway", "ai-gateway-v1", "ai-gateway-v2"])
+def test_cli_emits_kongctl_referencing_the_generated_data_plane_certificate(tmp_path, gateway):
+    source = tmp_path / "env.yaml"
+    source.write_text(f"customer: acme\ngateway: {gateway}\n", encoding="utf-8")
+    out = tmp_path / "out"
+    result = CliRunner().invoke(main, [str(source), "-o", str(out)])
+    assert result.exit_code == 0, result.output
+    config = out / "config/kongctl.yaml"
+    doc = load_kongctl(config.read_text(encoding="utf-8"))
+    resource = "ai_gateways" if gateway == "ai-gateway-v2" else "control_planes"
+    cert = doc[resource][0]["data_plane_certificates"][0]["cert"]
+    assert cert["__tag__"] == "!file"
+    cert_file = (config.parent / cert["value"]).resolve()
+    assert cert_file == out / ".certs/cluster.crt"
+    assert cert_file.read_text().startswith("-----BEGIN CERTIFICATE-----")
+
+    # 公開証明書だけを登録し、対応する秘密鍵は Data Plane のマウント元に残す。
+    compose = yaml.safe_load((out / "compose.yaml").read_text())
+    dp = next(
+        service
+        for service in compose["services"].values()
+        if "KONG_CLUSTER_CERT" in service.get("environment", {})
     )
-    assert "config/kongctl.yaml" not in render_all(ctx_for(upstream="none"))
-    assert "config/kongctl.yaml" not in render_all(
-        ctx_for(gateway="ai-gateway-v1", ai={"providers": [AZURE_PROVIDER]})
-    )
+    cert_dest = Path(dp["environment"]["KONG_CLUSTER_CERT"])
+    assert f".certs:{cert_dest.parent}" in dp["volumes"]
+    assert cert_dest.name == cert_file.name
+    key_dest = Path(dp["environment"]["KONG_CLUSTER_CERT_KEY"])
+    assert key_dest.parent == cert_dest.parent
+    assert (cert_file.parent / key_dest.name).is_file()
+    assert ".key" not in config.read_text()
 
 
 def test_namespace_is_customer():
@@ -107,7 +160,7 @@ def test_semantic_balancer_with_pgvector():
 def test_data_plane_certificate_references_generated_file():
     doc = kongctl_of(ctx_for(gateway="ai-gateway-v2", ai={"providers": [AZURE_PROVIDER]}))
     cert = doc["ai_gateways"][0]["data_plane_certificates"][0]
-    assert cert["cert"] == {"__tag__": "!file", "value": ".certs/cluster.crt"}
+    assert cert["cert"] == {"__tag__": "!file", "value": "../.certs/cluster.crt"}
 
 
 def test_multiple_providers_emit_multiple_model_providers():
@@ -162,3 +215,20 @@ def test_redis_vectordb_block_has_no_database_fields():
     vectordb = doc["ai_gateways"][0]["models"][0]["config"]["balancer"]["vectordb"]
     assert "database" not in vectordb
     assert "user" not in vectordb
+
+
+def test_konnect_name_renames_the_control_plane_entity():
+    doc = kongctl_of(ctx_for(gateway="ai-gateway-v1", konnect_name="bluesky",
+                             ai={"providers": [AZURE_PROVIDER]}))
+    cp = doc["control_planes"][0]
+    assert cp["ref"] == cp["name"] == "bluesky-ai-gateway"
+    # namespace は customer のまま。動かすと sync 済みのリソースが管理外に見える
+    assert doc["_defaults"]["kongctl"]["namespace"] == "acme"
+
+
+def test_konnect_name_renames_the_ai_gateway_entity():
+    doc = kongctl_of(ctx_for(gateway="ai-gateway-v2", konnect_name="bluesky",
+                             ai={"providers": [AZURE_PROVIDER]}))
+    gateway = doc["ai_gateways"][0]
+    assert gateway["ref"] == gateway["name"] == gateway["display_name"] == "bluesky-ai-gateway"
+    assert gateway["models"][0]["ai_gateway"]["value"] == "bluesky-ai-gateway#id"

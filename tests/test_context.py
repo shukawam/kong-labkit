@@ -306,3 +306,128 @@ def test_env_vars_entra_are_blank():
 
 def test_namespace_is_customer():
     assert build_context(spec_from()).namespace == "acme"
+
+
+def test_ldap_context_derives_dns_from_the_customer():
+    ldap = build_context(spec_from(idp={"type": "ldap"})).idp.ldap
+    assert ldap.base_dn == "dc=acme,dc=local"
+    assert ldap.users_dn == "ou=people,dc=acme,dc=local"
+    assert ldap.groups_dn == "ou=groups,dc=acme,dc=local"
+    # lldap は ldap_user_dn に素の名前を受け取り、cn=<name>,ou=people,<base> を作る
+    assert ldap.bind_dn == "cn=admin,ou=people,dc=acme,dc=local"
+    assert ldap.host == "lldap"
+    assert ldap.port == 3890
+    assert ldap.attribute == "uid"
+
+
+def test_ldap_idp_is_enabled_but_has_no_oidc_fields():
+    idp = build_context(spec_from(idp={"type": "ldap"})).idp
+    assert idp.enabled is True
+    assert idp.auth_plugin == "ldap-auth-advanced"
+    assert idp.issuer is None
+    assert idp.client_id is None
+    assert idp.token_endpoint is None
+
+
+def test_oidc_idps_expose_the_openid_connect_plugin():
+    assert build_context(spec_from(idp={"type": "keycloak", "realm": "acme"})).idp.auth_plugin == (
+        "openid-connect"
+    )
+    assert build_context(spec_from(idp={"type": "entra-id"})).idp.auth_plugin == "openid-connect"
+    assert build_context(spec_from()).idp.auth_plugin is None
+
+
+DEV_AND_RESEARCHER = {
+    "type": "ldap",
+    "users": [
+        {"name": "developer", "email": "developer@example.com", "groups": ["developer-dep"]},
+        {
+            "name": "researcher",
+            "email": "researcher@example.com",
+            "groups": ["developer-dep", "researcher-dep"],
+        },
+    ],
+}
+
+
+def test_ldap_defaults_to_a_single_test_user():
+    ldap = build_context(spec_from(idp={"type": "ldap"})).idp.ldap
+    assert [u.name for u in ldap.users] == ["tester"]
+    assert ldap.users[0].password == "tester-password"
+    assert ldap.users[0].email == "tester@example.com"
+    assert ldap.groups == ("acme-ai-users",)
+
+
+def test_ldap_groups_are_derived_from_users_without_duplicates():
+    ldap = build_context(spec_from(idp=DEV_AND_RESEARCHER)).idp.ldap
+    assert [u.name for u in ldap.users] == ["developer", "researcher"]
+    # 宣言順を保ったまま重複を潰す
+    assert ldap.groups == ("developer-dep", "researcher-dep")
+    assert ldap.users[1].groups == ("developer-dep", "researcher-dep")
+
+
+def test_ldap_user_email_and_password_have_derivable_defaults():
+    ldap = build_context(spec_from(idp={"type": "ldap", "users": [{"name": "developer"}]})).idp.ldap
+    assert ldap.users[0].email == "developer@example.com"
+    assert ldap.users[0].password == "developer-password"
+
+
+def test_ldap_smoke_uses_the_first_user():
+    idp = build_context(spec_from(idp=DEV_AND_RESEARCHER)).idp
+    assert idp.test_username == "developer"
+    assert idp.test_password == "developer-password"
+
+
+def test_ldap_services_include_the_one_shot_bootstrap():
+    ctx = build_context(spec_from(idp={"type": "ldap"}))
+    assert ctx.services == ["kong-dp", "httpbin", "lldap", "lldap-bootstrap", "otel-lgtm"]
+
+
+def test_env_vars_ldap_are_deterministic_local_values():
+    ctx = build_context(spec_from(idp={"type": "ldap"}))
+    # 乱数にするとゴールデンテストが毎回落ちるので固定値にしている
+    assert ctx.env_vars["LLDAP_ADMIN_USERNAME"] == "admin"
+    assert ctx.env_vars["LLDAP_ADMIN_PASSWORD"] == "local-dev-password"
+    assert ctx.env_vars["LLDAP_JWT_SECRET"] == "local-dev-jwt-secret"
+    assert all(value for key, value in ctx.env_vars.items() if key.startswith("LLDAP_"))
+    assert "KEYCLOAK_ADMIN" not in ctx.env_vars
+
+
+def test_ldap_bind_password_matches_the_dotenv_default():
+    ctx = build_context(spec_from(idp={"type": "ldap"}))
+    assert ctx.idp.ldap.bind_password == ctx.env_vars["LLDAP_ADMIN_PASSWORD"]
+
+
+def test_konnect_name_replaces_only_the_control_plane_name():
+    ctx = build_context(
+        spec_from(
+            gateway="ai-gateway-v1",
+            konnect_name="bluesky",
+            idp={"type": "ldap"},
+            ai={"providers": [AZURE_PROVIDER]},
+        )
+    )
+    assert ctx.kong.cp_name == "bluesky-ai-gateway"
+    # 出力先と顧客側の識別子は customer のまま
+    assert ctx.namespace == "acme"
+    assert ctx.idp.ldap.base_dn == "dc=acme,dc=local"
+    assert ctx.idp.ldap.groups == ("acme-ai-users",)
+
+
+def test_konnect_name_keeps_the_gateway_suffix():
+    assert build_context(spec_from(konnect_name="bluesky")).kong.cp_name == "bluesky-gateway"
+    assert build_context(
+        spec_from(gateway="ai-gateway-v2", konnect_name="bluesky")
+    ).kong.cp_name == "bluesky-ai-gateway"
+
+
+def test_konnect_name_does_not_touch_the_keycloak_client_ids():
+    idp = build_context(
+        spec_from(konnect_name="bluesky", idp={"type": "keycloak", "realm": "acme"})
+    ).idp
+    assert idp.client_id == "acme-client"
+    assert idp.public_client_id == "acme-public"
+
+
+def test_certs_common_name_follows_the_control_plane_name():
+    assert build_context(spec_from(konnect_name="bluesky")).certs.common_name == "bluesky-gateway"

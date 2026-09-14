@@ -2,6 +2,22 @@ _defaults:
   kongctl:
     namespace: {{ namespace }}
 
+{% if spec.control_plane.value == 'self-managed' %}
+# self-managed の Control Plane は compose.yaml で作成するため、Konnect リソースは定義しません。
+# Gateway 設定は config/kong/kong.yaml を mise run sync で適用します。
+{% elif spec.gateway.value != 'ai-gateway-v2' %}
+control_planes:
+  - ref: {{ kong.cp_name }}
+    name: {{ kong.cp_name }}
+    cluster_type: CLUSTER_TYPE_CONTROL_PLANE
+    auth_type: pinned_client_certs
+    data_plane_certificates:
+      - ref: {{ kong.cp_name }}-cert
+        cert: !file ../{{ certs.crt_path }}
+    _deck:
+      files:
+        - kong/kong.yaml
+{% else %}
 ai_gateways:
   - ref: {{ kong.cp_name }}
     name: {{ kong.cp_name }}
@@ -116,4 +132,5 @@ ai_gateways:
         ai_gateway: !ref {{ kong.cp_name }}#id
         title: Cluster Certificate
         description: Cluster certificate for {{ kong.cp_name }}
-        cert: !file .certs/cluster.crt
+        cert: !file ../{{ certs.crt_path }}
+{% endif %}
