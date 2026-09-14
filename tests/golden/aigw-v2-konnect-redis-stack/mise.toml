@@ -1,0 +1,51 @@
+[tasks.up]
+description = "環境を起動する"
+run = "docker compose up -d"
+
+[tasks.down]
+description = "環境を停止する"
+run = "docker compose down"
+
+[tasks.reset]
+description = "ボリュームごと作り直す"
+run = """
+docker compose down -v
+docker compose up -d
+"""
+
+[tasks.certs]
+description = "クラスタ証明書を再生成する"
+run = """
+mkdir -p .certs
+openssl req -new -x509 -nodes -newkey rsa:2048 \
+  -subj "/CN=acme-ai-gateway/C=JP" \
+  -keyout .certs/cluster.key -out .certs/cluster.crt -days 1095
+chmod 600 .certs/cluster.key
+echo "生成しました。Konnect の Control Plane に .certs/cluster.crt を登録してください。"
+"""
+
+[tasks.sync]
+description = "宣言的設定を適用する"
+run = "kongctl sync konnect -f config/kongctl.yaml --auto-approve"
+
+[tasks.diff]
+description = "宣言的設定の差分を見る"
+run = "kongctl diff konnect -f config/kongctl.yaml"
+
+[tasks.logs]
+description = "ログを追う。サービス名を引数で渡せる"
+run = 'docker compose logs -f {{arg(name="service", default="")}}'
+
+[tasks.smoke]
+description = "主要経路を叩いて疎通を確認する"
+run = """
+set -e
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8100/status
+curl -sS -f -X POST http://localhost:8000/v1/gpt-5-6/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"ping"}]}' > /dev/null
+echo "smoke: OK"
+"""
+
+[env]
+mise.file = ".env"

@@ -1,0 +1,36 @@
+_format_version: "3.0"
+
+services:
+  - name: llm
+    # ai-proxy-advanced が上流を差し替えるが、service には URL が必須なので捨て値を置く
+    url: http://localhost:32000
+    routes:
+      - name: chat
+        paths:
+          - /v1/chat/completions
+        methods:
+          - POST
+        strip_path: false
+    plugins:
+      - name: ai-proxy-advanced
+        config:
+          targets:
+            - route_type: llm/v1/chat
+              auth:
+                header_name: api-key
+                header_value: ${AZURE_OPENAI_API_KEY}
+              model:
+                provider: azure
+                name: gpt-5-6
+                options:
+                  azure_instance: acme-foundry
+                  azure_deployment_id: gpt-5.6
+                  azure_api_version: "2024-12-01-preview"
+
+plugins:
+  - name: opentelemetry
+    config:
+      traces_endpoint: http://otel-lgtm:4318/v1/traces
+      logs_endpoint: http://otel-lgtm:4318/v1/logs
+      resource_attributes:
+        service.name: acme-ai-gateway

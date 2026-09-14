@@ -1,0 +1,29 @@
+_format_version: "3.0"
+
+services:
+  - name: httpbin
+    url: http://httpbin:80
+    routes:
+      - name: httpbin
+        paths:
+          - /httpbin
+        strip_path: true
+    plugins:
+      - name: openid-connect
+        config:
+          issuer: http://keycloak:8080/realms/acme
+          client_id:
+            - acme-client
+          client_secret:
+            - ${KEYCLOAK_CLIENT_SECRET}
+          auth_methods:
+            - bearer
+            - client_credentials
+
+plugins:
+  - name: opentelemetry
+    config:
+      traces_endpoint: http://otel-lgtm:4318/v1/traces
+      logs_endpoint: http://otel-lgtm:4318/v1/logs
+      resource_attributes:
+        service.name: acme-gateway

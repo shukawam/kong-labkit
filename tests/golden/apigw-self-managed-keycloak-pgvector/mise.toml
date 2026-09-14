@@ -1,0 +1,47 @@
+[tasks.up]
+description = "環境を起動する"
+run = "docker compose up -d"
+
+[tasks.down]
+description = "環境を停止する"
+run = "docker compose down"
+
+[tasks.reset]
+description = "ボリュームごと作り直す"
+run = """
+docker compose down -v
+docker compose up -d
+"""
+
+[tasks.certs]
+description = "クラスタ証明書を再生成する"
+run = """
+mkdir -p config/kong/certs
+openssl req -new -x509 -nodes -newkey rsa:2048 \
+  -subj "/CN=kong-cluster/C=JP" \
+  -keyout config/kong/certs/tls.key -out config/kong/certs/tls.crt -days 1095
+chmod 600 config/kong/certs/tls.key
+"""
+
+[tasks.sync]
+description = "宣言的設定を適用する"
+run = "deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:8001"
+
+[tasks.diff]
+description = "宣言的設定の差分を見る"
+run = "deck gateway diff config/kong/kong.yaml --kong-addr http://localhost:8001"
+
+[tasks.logs]
+description = "ログを追う。サービス名を引数で渡せる"
+run = 'docker compose logs -f {{arg(name="service", default="")}}'
+
+[tasks.smoke]
+description = "主要経路を叩いて疎通を確認する"
+run = """
+set -e
+curl -sS -f http://localhost:8000/httpbin/status/200 > /dev/null
+echo "smoke: OK"
+"""
+
+[env]
+mise.file = ".env"
