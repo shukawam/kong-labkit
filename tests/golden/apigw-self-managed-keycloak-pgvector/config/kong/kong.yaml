@@ -8,6 +8,10 @@ services:
         paths:
           - /httpbin
         strip_path: true
+        # 省略すると平文 HTTP が 426 で弾かれる（decK/Kong のルート protocols 既定値は https のみ）
+        protocols:
+          - http
+          - https
     plugins:
       - name: openid-connect
         config:

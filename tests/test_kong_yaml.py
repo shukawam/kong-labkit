@@ -31,6 +31,11 @@ def test_api_gateway_routes_to_httpbin():
     assert service["routes"][0]["strip_path"] is True
 
 
+def test_api_gateway_route_allows_plaintext_http():
+    doc = kong_yaml_of(ctx_for())
+    assert "http" in doc["services"][0]["routes"][0]["protocols"]
+
+
 def test_api_gateway_without_upstream_has_no_services():
     doc = kong_yaml_of(ctx_for(upstream="none"))
     assert doc.get("services", []) == []
@@ -73,6 +78,12 @@ def test_aigw_v1_uses_ai_proxy_advanced():
     assert target["model"]["name"] == "gpt-5-6"
     assert target["model"]["options"]["azure_deployment_id"] == "gpt-5.6"
     assert target["route_type"] == "llm/v1/chat"
+
+
+def test_aigw_v1_chat_route_allows_plaintext_http():
+    ctx = ctx_for(gateway="ai-gateway-v1", ai={"providers": [AZURE_PROVIDER]})
+    doc = kong_yaml_of(ctx)
+    assert "http" in doc["services"][0]["routes"][0]["protocols"]
 
 
 def test_aigw_v1_semantic_cache_plugin_points_at_vectordb():
