@@ -234,3 +234,31 @@ def test_httpbin_service(compose_of):
     svc = doc["services"]["httpbin"]
     assert svc["image"] == "kennethreitz/httpbin"
     assert svc["ports"] == ["8081:80"]
+
+
+HARDENING = {
+    "KONG_ROUTER_FLAVOR": "expressions",
+    "KONG_TRUSTED_IPS": "0.0.0.0/0",
+    "KONG_REAL_IP_HEADER": "X-Forwarded-For",
+    "KONG_REAL_IP_RECURSIVE": "on",
+}
+
+
+@pytest.mark.parametrize(
+    "overrides, partial, kong_services",
+    [
+        ({"gateway": "ai-gateway-v2"}, "kong-aigw-v2", ["kong"]),
+        ({}, "kong-dp", ["gateway"]),
+        ({"control_plane": "self-managed"}, "kong-self-managed", ["kong-cp", "kong-dp"]),
+    ],
+    ids=["aigw-v2", "konnect-dp", "self-managed"],
+)
+def test_every_kong_service_carries_the_same_hardening(
+    compose_of, overrides, partial, kong_services
+):
+    # spec が名指しした過去の罠は構成によらず同じ値で入っていなければ意味がない
+    doc = compose_of(only_services(ctx_for(**overrides), partial))
+    for name in kong_services:
+        env = doc["services"][name]["environment"]
+        for key, value in HARDENING.items():
+            assert env[key] == value, (name, key)

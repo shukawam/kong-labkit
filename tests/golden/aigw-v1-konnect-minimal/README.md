@@ -20,11 +20,13 @@
 `.env` の次の項目を埋めてから起動してください。
 
 - `CONTROL_PLANE_ID`
+- `KONNECT_PAT`
 - `AZURE_OPENAI_API_KEY`
 
 ## 初手
 
 ```bash
+# Konnect の Personal Access Token を発行し（Konnect > 右上のアカウント > Personal Access Tokens）、.env の KONNECT_PAT に書く
 mise run certs                      # .certs/cluster.{crt,key} を生成
 # Konnect で acme-ai-gateway を作成し、.certs/cluster.crt を登録する
 # 発行された Control Plane ID を .env の CONTROL_PLANE_ID に書く

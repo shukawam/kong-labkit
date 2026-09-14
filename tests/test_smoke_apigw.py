@@ -195,3 +195,13 @@ def test_keycloak_issues_a_token(running_env):
     )
     assert result.returncode == 0, result.stderr
     assert "access_token" in result.stdout
+
+
+def test_generated_smoke_task_succeeds_as_written(running_env):
+    # 生成物の mise run smoke は README の初手の最後の 1 行。テスト側だけ認証に対応しても意味がない
+    import tomllib
+
+    run = tomllib.loads((running_env / "mise.toml").read_text(encoding="utf-8"))["tasks"][
+        "smoke"
+    ]["run"]
+    _wait_for(["bash", "-c", run], cwd=running_env, timeout=90)

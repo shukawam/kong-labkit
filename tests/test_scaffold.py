@@ -42,12 +42,88 @@ def test_smoke_targets_the_allocated_proxy_port():
     assert "localhost:8000/httpbin/status/200" in doc["tasks"]["smoke"]["run"]
 
 
+def test_smoke_uses_a_token_when_the_route_is_protected():
+    # idp 有効時は upstream が openid-connect で保護されるため、無認証の curl -f は必ず 401 で落ちる
+    ctx = ctx_for(idp={"type": "keycloak", "realm": "acme"})
+    run = tomllib.loads(render_all(ctx)["mise.toml"])["tasks"]["smoke"]["run"]
+    assert ctx.idp.token_endpoint in run
+    assert f"client_id={ctx.idp.public_client_id}" in run
+    assert 'Authorization: Bearer $TOKEN' in run
+
+
+def test_smoke_without_idp_stays_anonymous():
+    run = tomllib.loads(render_all(ctx_for())["mise.toml"])["tasks"]["smoke"]["run"]
+    assert "Bearer" not in run
+    assert "curl -sS -f http://localhost:8000/httpbin/status/200" in run
+
+
+def test_smoke_for_entra_id_only_checks_the_status_code():
+    # 無人で direct access grants を通せないため、トークン取得を試みてはいけない
+    run = tomllib.loads(render_all(ctx_for(idp={"type": "entra-id"}))["mise.toml"])["tasks"][
+        "smoke"
+    ]["run"]
+    assert "Bearer" not in run
+    assert "%{http_code}" in run
+
+
+def test_smoke_task_is_valid_shell():
+    import subprocess
+
+    for ctx in (
+        ctx_for(),
+        ctx_for(idp={"type": "keycloak", "realm": "acme"}),
+        ctx_for(idp={"type": "entra-id"}),
+        ctx_for(gateway="ai-gateway-v2", ai={"providers": [AZURE_PROVIDER]}),
+    ):
+        run = tomllib.loads(render_all(ctx)["mise.toml"])["tasks"]["smoke"]["run"]
+        result = subprocess.run(["bash", "-n"], input=run, text=True, capture_output=True)
+        assert result.returncode == 0, result.stderr
+
+
+def test_sync_uses_deck_for_konnect_when_the_config_is_deck_format():
+    # kong.yaml は _format_version の decK 形式で、kongctl のリソース形式ではない
+    for gateway, ai in (("api-gateway", {}), ("ai-gateway-v1", {"providers": [AZURE_PROVIDER]})):
+        ctx = ctx_for(gateway=gateway, control_plane="konnect", **({"ai": ai} if ai else {}))
+        doc = tomllib.loads(render_all(ctx)["mise.toml"])
+        for task in ("sync", "diff"):
+            run = doc["tasks"][task]["run"]
+            assert run.split()[0:3] != ["kongctl", task, "konnect"], run
+            assert "deck gateway " + task in run
+            assert f"--konnect-control-plane-name {ctx.kong.cp_name}" in run
+            assert "$KONNECT_PAT" in run
+            assert f"--konnect-addr {ctx.kong.konnect_api_url}" in run
+
+
+def test_deck_tasks_export_the_prefixed_environment_variables():
+    ctx = ctx_for(gateway="ai-gateway-v1", ai={"providers": [AZURE_PROVIDER]})
+    run = tomllib.loads(render_all(ctx)["mise.toml"])["tasks"]["sync"]["run"]
+    assert run.startswith('DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" deck gateway sync')
+
+
+def test_konnect_environment_has_a_pat_slot_and_readme_says_where_to_get_it():
+    ctx = ctx_for(gateway="ai-gateway-v2", ai={"providers": [AZURE_PROVIDER]})
+    files = render_all(ctx)
+    assert 'KONNECT_PAT=""' in files[".env"]
+    assert "KONNECT_PAT" in files["README.md"]
+    assert "Personal Access Token" in files["README.md"]
+    assert "$KONNECT_PAT" in tomllib.loads(files["mise.toml"])["tasks"]["sync"]["run"]
+
+
 def test_certs_task_only_for_konnect():
     konnect = tomllib.loads(render_all(ctx_for())["mise.toml"])
     assert ".certs" in konnect["tasks"]["certs"]["run"]
 
     self_managed = tomllib.loads(render_all(ctx_for(control_plane="self-managed"))["mise.toml"])
     assert "config/kong/certs" in self_managed["tasks"]["certs"]["run"]
+
+
+def test_certs_task_paths_come_from_the_context():
+    for ctx in (ctx_for(), ctx_for(control_plane="self-managed")):
+        run = tomllib.loads(render_all(ctx)["mise.toml"])["tasks"]["certs"]["run"]
+        assert ctx.certs.crt_path in run
+        assert ctx.certs.key_path in run
+        assert f"/CN={ctx.certs.common_name}/" in run
+        assert f"subjectAltName=DNS:{ctx.certs.common_name}" in run
 
 
 def test_env_file_lists_every_required_variable():

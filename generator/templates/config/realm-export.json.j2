@@ -19,7 +19,7 @@
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
-      "secret": "{{ env_vars['KEYCLOAK_CLIENT_SECRET'] }}",
+      "secret": "{{ idp.client_secret }}",
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": true,
@@ -28,7 +28,7 @@
       "defaultClientScopes": ["openid", "profile", "email", "{{ spec.customer }}-scope"]
     },
     {
-      "clientId": "{{ spec.customer }}-public",
+      "clientId": "{{ idp.public_client_id }}",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": true,
@@ -41,7 +41,7 @@
   ],
   "users": [
     {
-      "username": "tester",
+      "username": "{{ idp.test_username }}",
       "enabled": true,
       "emailVerified": true,
       "email": "tester@example.com",
@@ -50,7 +50,7 @@
       "credentials": [
         {
           "type": "password",
-          "value": "tester",
+          "value": "{{ idp.test_password }}",
           "temporary": false
         }
       ],

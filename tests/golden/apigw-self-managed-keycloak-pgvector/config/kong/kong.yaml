@@ -15,11 +15,11 @@ services:
     plugins:
       - name: openid-connect
         config:
-          issuer: http://keycloak:8080/realms/acme
+          issuer: 'http://keycloak:8080/realms/acme'
           client_id:
-            - acme-client
+            - 'acme-client'
           client_secret:
-            - ${KEYCLOAK_CLIENT_SECRET}
+            - 'local-dev-secret'
           # decK が明示値なしの sync を拒否するため固定値を設定する
           cache_tokens_salt: local-dev-salt
           auth_methods:

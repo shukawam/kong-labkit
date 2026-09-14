@@ -3,6 +3,14 @@ x-default: &default
     - kong-network
   restart: on-failure
 
+# 過去に踏んだ罠。expressions でないと新しいルータ構文のルートが動かず、
+# TRUSTED_IPS / REAL_IP を外すと X-Forwarded-For が上流で信用されず元クライアント IP を失う
+x-kong-hardening: &kong-hardening
+  KONG_ROUTER_FLAVOR: expressions
+  KONG_TRUSTED_IPS: 0.0.0.0/0
+  KONG_REAL_IP_HEADER: X-Forwarded-For
+  KONG_REAL_IP_RECURSIVE: "on"
+
 networks:
   kong-network:
 
@@ -15,6 +23,7 @@ services:
       - 8000:8000
       - 8100:8100
     environment:
+      <<: *kong-hardening
       KONG_ROLE: data_plane
       KONG_DATABASE: "off"
       KONG_VITALS: "off"
@@ -28,7 +37,6 @@ services:
       KONG_LUA_SSL_TRUSTED_CERTIFICATE: system
       KONG_KONNECT_MODE: "on"
       KONG_CLUSTER_DP_LABELS: type:docker-macOsArmOS
-      KONG_ROUTER_FLAVOR: expressions
       KONG_STATUS_LISTEN: 0.0.0.0:8100
       KONG_LOG_LEVEL: debug
       KONG_PROXY_ACCESS_LOG: /dev/stdout

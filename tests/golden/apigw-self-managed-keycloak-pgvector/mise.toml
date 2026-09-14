@@ -15,21 +15,22 @@ docker compose up -d
 
 [tasks.certs]
 description = "クラスタ証明書を再生成する"
-run = """
+run = '''
 mkdir -p config/kong/certs
 openssl req -new -x509 -nodes -newkey rsa:2048 \
-  -subj "/CN=kong-cluster/C=JP" \
+  -subj "/CN=kong_clustering/C=JP" \
+  -addext "subjectAltName=DNS:kong_clustering" \
   -keyout config/kong/certs/tls.key -out config/kong/certs/tls.crt -days 1095
 chmod 600 config/kong/certs/tls.key
-"""
+'''
 
 [tasks.sync]
 description = "宣言的設定を適用する"
-run = "deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:8001"
+run = 'deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:8001'
 
 [tasks.diff]
 description = "宣言的設定の差分を見る"
-run = "deck gateway diff config/kong/kong.yaml --kong-addr http://localhost:8001"
+run = 'deck gateway diff config/kong/kong.yaml --kong-addr http://localhost:8001'
 
 [tasks.logs]
 description = "ログを追う。サービス名を引数で渡せる"
@@ -37,11 +38,17 @@ run = 'docker compose logs -f {{arg(name="service", default="")}}'
 
 [tasks.smoke]
 description = "主要経路を叩いて疎通を確認する"
-run = """
+run = '''
 set -e
-curl -sS -f http://localhost:8000/httpbin/status/200 > /dev/null
+TOKEN=$(curl -sS -f -X POST http://localhost:8080/realms/acme/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=acme-public \
+  -d username=tester -d password=tester \
+  | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+test -n "$TOKEN"
+curl -sS -f -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/httpbin/status/200 > /dev/null
 echo "smoke: OK"
-"""
+'''
 
 [env]
 mise.file = ".env"

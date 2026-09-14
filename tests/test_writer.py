@@ -203,3 +203,56 @@ def test_cli_refuses_dirty_git_worktree_with_force(tmp_path):
     assert result.exit_code == 1
     assert "commit か stash" in result.output
     assert "Traceback" not in result.output
+
+
+def _generate(tmp_path, body: str, *args: str):
+    env_yaml = tmp_path / "acme.yaml"
+    env_yaml.write_text(body, encoding="utf-8")
+    return CliRunner().invoke(main, [str(env_yaml), "-o", str(tmp_path / "out"), *args])
+
+
+def test_cli_lists_env_yaml_among_the_written_files(tmp_path):
+    # env.yaml も 3 分類に載らないと、--force の後に何が変わったかが分からない
+    result = _generate(tmp_path, "customer: acme\ngateway: api-gateway\n")
+    assert "作成: env.yaml" in result.output
+
+
+def test_cli_reports_env_yaml_as_overwritten_on_force(tmp_path):
+    _generate(tmp_path, "customer: acme\ngateway: api-gateway\n")
+    result = _generate(tmp_path, "customer: acme\ngateway: api-gateway\nupstream: none\n", "--force")
+    assert result.exit_code == 0, result.output
+    assert "上書き: env.yaml" in result.output
+    assert (tmp_path / "out" / "env.yaml").read_text(encoding="utf-8").endswith("upstream: none\n")
+
+
+def test_cli_reports_existing_certificates_as_skipped(tmp_path):
+    _generate(tmp_path, "customer: acme\ngateway: ai-gateway-v2\n")
+    result = _generate(tmp_path, "customer: acme\ngateway: ai-gateway-v2\n", "--force")
+    assert "保護してスキップ: .certs/cluster.crt" in result.output
+
+
+def test_cli_warns_about_overwrites_outside_git(tmp_path):
+    # git に預けられない生成先では、上書き対象を先に見せるしか手が無い
+    _generate(tmp_path, "customer: acme\ngateway: api-gateway\n")
+    result = _generate(tmp_path, "customer: acme\ngateway: api-gateway\n", "--force")
+    assert result.exit_code == 0, result.output
+    assert "警告" in result.output
+    assert "git 管理下ではない" in result.output
+    assert "compose.yaml" in result.output
+    listed = result.output.split("上書きするファイル: ")[1].split("\n")[0].split(", ")
+    assert ".env" not in listed  # 保護対象は上書きしないので警告にも出さない
+
+
+def test_cli_does_not_warn_when_the_target_is_a_clean_repo(tmp_path):
+    out = tmp_path / "out"
+    _generate(tmp_path, "customer: acme\ngateway: api-gateway\n")
+    subprocess.run(["git", "init", "-q"], cwd=out, check=True)
+    subprocess.run(["git", "add", "-A", "-f"], cwd=out, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "init"],
+        cwd=out,
+        check=True,
+    )
+    result = _generate(tmp_path, "customer: acme\ngateway: api-gateway\n", "--force")
+    assert result.exit_code == 0, result.output
+    assert "git 管理下ではない" not in result.output

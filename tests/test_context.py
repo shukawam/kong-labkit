@@ -26,12 +26,14 @@ def test_konnect_domains_use_region():
     kong = build_context(spec_from(region="eu")).kong
     assert kong.konnect_domain == "eu.cp.konghq.com"
     assert kong.konnect_telemetry_domain == "eu.tp.konghq.com"
+    assert kong.konnect_api_url == "https://eu.api.konghq.com"
 
 
 def test_self_managed_has_no_konnect_domains():
     kong = build_context(spec_from(control_plane="self-managed")).kong
     assert kong.konnect_domain is None
     assert kong.konnect_telemetry_domain is None
+    assert kong.konnect_api_url is None
 
 
 def test_cp_name_differs_between_ai_and_api_gateway():
@@ -47,10 +49,112 @@ def test_keycloak_issuer_is_resolved():
     assert idp.service_name == "keycloak"
 
 
-def test_entra_issuer_uses_env_placeholder():
+def test_entra_issuer_uses_deck_env_reference():
+    # decK は ${VAR} を展開しない。${{ env "DECK_..." }} でなければただの文字列になる
     idp = build_context(spec_from(idp={"type": "entra-id"})).idp
-    assert idp.issuer == "https://login.microsoftonline.com/${AZURE_TENANT_ID}/v2.0"
+    assert idp.issuer == (
+        'https://login.microsoftonline.com/${{ env "DECK_AZURE_TENANT_ID" }}/v2.0'
+    )
+    assert idp.client_id == '${{ env "DECK_AZURE_CLIENT_ID" }}'
+    assert idp.client_secret == '${{ env "DECK_AZURE_CLIENT_SECRET" }}'
     assert idp.service_name is None
+
+
+def test_keycloak_client_secret_is_the_literal_value():
+    idp = build_context(spec_from(idp={"type": "keycloak", "realm": "acme"})).idp
+    assert idp.client_secret == "local-dev-secret"
+    assert idp.public_client_id == "acme-public"
+    assert idp.token_endpoint == (
+        "http://localhost:8080/realms/acme/protocol/openid-connect/token"
+    )
+
+
+def test_deck_env_aliases_map_to_dotenv_names():
+    ctx = build_context(spec_from(idp={"type": "entra-id"}))
+    assert ctx.deck.env_aliases == {
+        "DECK_AZURE_TENANT_ID": "AZURE_TENANT_ID",
+        "DECK_AZURE_CLIENT_ID": "AZURE_CLIENT_ID",
+        "DECK_AZURE_CLIENT_SECRET": "AZURE_CLIENT_SECRET",
+    }
+    for alias, source in ctx.deck.env_aliases.items():
+        assert source in ctx.env_vars
+        assert f'{alias}="${source}"' in ctx.deck.env_prefix
+
+
+def test_ai_gateway_v2_needs_no_deck_aliases():
+    ctx = build_context(
+        spec_from(gateway="ai-gateway-v2", ai={"providers": [AZURE_PROVIDER]})
+    )
+    assert ctx.deck.env_aliases == {}
+    assert ctx.deck.env_prefix == ""
+
+
+def test_deck_provider_auth_differs_per_provider():
+    ctx = build_context(
+        spec_from(
+            gateway="ai-gateway-v1",
+            ai={
+                "providers": [
+                    AZURE_PROVIDER,
+                    {"type": "anthropic", "models": [{"name": "claude-opus-5"}]},
+                ]
+            },
+        )
+    )
+    azure, anthropic = ctx.deck.provider_auth
+    assert azure["header_name"] == "api-key"
+    assert azure["header_value"] == '\'${{ env "DECK_AZURE_OPENAI_API_KEY" }}\''
+    assert anthropic["header_name"] == "x-api-key"
+    assert anthropic["header_value"] == '\'${{ env "DECK_ANTHROPIC_API_KEY" }}\''
+
+
+def test_certs_common_name_differs_by_control_plane():
+    konnect = build_context(spec_from(gateway="ai-gateway-v2")).certs
+    assert konnect.common_name == "acme-ai-gateway"
+    assert konnect.crt_path == ".certs/cluster.crt"
+    assert konnect.key_path == ".certs/cluster.key"
+
+    self_managed = build_context(spec_from(control_plane="self-managed")).certs
+    # shared mTLS は CN をこの固定リテラルとしか照合しない
+    assert self_managed.common_name == "kong_clustering"
+    assert self_managed.crt_path == "config/kong/certs/tls.crt"
+
+
+def test_semantic_switches_are_independent():
+    def semantic_of(**ai):
+        return build_context(
+            spec_from(
+                gateway="ai-gateway-v2",
+                vectordb={"type": "pgvector"},
+                ai={"providers": [AZURE_PROVIDER], **ai},
+            )
+        ).semantic
+
+    assert semantic_of() == semantic_of(semantic_cache=False, semantic_routing=False)
+    assert semantic_of().enabled is False
+    assert semantic_of(semantic_cache=True).cache is True
+    assert semantic_of(semantic_cache=True).routing is False
+    assert semantic_of(semantic_routing=True).routing is True
+    assert semantic_of(semantic_routing=True).cache is False
+
+
+def test_pgvector_password_comes_from_the_context():
+    ctx = build_context(
+        spec_from(
+            gateway="ai-gateway-v2",
+            vectordb={"type": "pgvector"},
+            ai={"providers": [AZURE_PROVIDER], "semantic_cache": True},
+        )
+    )
+    assert ctx.vector.password == "kong"
+    assert ctx.vector.database == "vectors"
+    assert ctx.vector.user == "kong"
+
+
+def test_konnect_env_has_a_slot_for_the_pat():
+    ctx = build_context(spec_from(gateway="ai-gateway-v2"))
+    assert ctx.env_vars["KONNECT_PAT"] == ""
+    assert "KONNECT_PAT" not in build_context(spec_from(control_plane="self-managed")).env_vars
 
 
 def test_idp_none():

@@ -5,7 +5,7 @@ pgvector:
   environment:
     POSTGRES_DB: {{ vector.database }}
     POSTGRES_USER: {{ vector.user }}
-    POSTGRES_PASSWORD: kong
+    POSTGRES_PASSWORD: {{ vector.password }}
   ports:
     - {{ ports.vector_pg }}:5432
   volumes:

@@ -122,3 +122,43 @@ def test_multiple_providers_emit_multiple_model_providers():
     gw = doc["ai_gateways"][0]
     assert [p["type"] for p in gw["model_providers"]] == ["azure", "bedrock"]
     assert [m["name"] for m in gw["models"]] == ["gpt-5-6", "claude-opus-5"]
+
+
+def test_balancer_follows_the_semantic_flags_not_the_vectordb():
+    # vectordb を置いただけで semantic 設定が出ると、フラグが何も効いていないのと同じ
+    ctx = ctx_for(
+        gateway="ai-gateway-v2",
+        cache={"type": "redis-stack"},
+        vectordb={"type": "redis-stack"},
+        ai={"providers": [AZURE_PROVIDER], "semantic_cache": False, "semantic_routing": False},
+    )
+    assert "balancer" not in kongctl_of(ctx)["ai_gateways"][0]["models"][0]["config"]
+
+
+def test_semantic_routing_alone_enables_the_balancer():
+    ctx = ctx_for(
+        gateway="ai-gateway-v2",
+        vectordb={"type": "pgvector"},
+        ai={"providers": [AZURE_PROVIDER], "semantic_routing": True},
+    )
+    balancer = kongctl_of(ctx)["ai_gateways"][0]["models"][0]["config"]["balancer"]
+    assert balancer["algorithm"] == "semantic"
+
+
+def test_pgvector_vectordb_block_matches_the_deck_side():
+    ctx = ctx_for(
+        gateway="ai-gateway-v2",
+        vectordb={"type": "pgvector"},
+        ai={"providers": [AZURE_PROVIDER], "semantic_cache": True},
+    )
+    vectordb = kongctl_of(ctx)["ai_gateways"][0]["models"][0]["config"]["balancer"]["vectordb"]
+    assert vectordb["database"] == ctx.vector.database
+    assert vectordb["user"] == ctx.vector.user
+    assert vectordb["password"] == ctx.vector.password
+
+
+def test_redis_vectordb_block_has_no_database_fields():
+    doc = kongctl_of(ctx_for(**{k: v for k, v in SEMANTIC.items() if k != "customer"}))
+    vectordb = doc["ai_gateways"][0]["models"][0]["config"]["balancer"]["vectordb"]
+    assert "database" not in vectordb
+    assert "user" not in vectordb

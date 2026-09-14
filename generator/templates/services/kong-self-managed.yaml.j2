@@ -38,7 +38,7 @@ kong-cp:
     - {{ ports.admin }}:8001
     - {{ ports.manager }}:8002
   environment:
-    <<: *kong-env
+    <<: [*kong-env, *kong-hardening]
     KONG_ROLE: control_plane
     KONG_ADMIN_LISTEN: 0.0.0.0:8001
     KONG_ADMIN_GUI_LISTEN: 0.0.0.0:8002
@@ -67,6 +67,7 @@ kong-dp:
     - {{ ports.proxy }}:8000
     - {{ ports.status }}:8100
   environment:
+    <<: *kong-hardening
     KONG_ROLE: data_plane
     KONG_DATABASE: "off"
     KONG_CLUSTER_MTLS: shared
@@ -80,9 +81,6 @@ kong-dp:
     KONG_UNTRUSTED_LUA: "on"
     KONG_LOG_LEVEL: debug
     KONG_LICENSE_DATA: ${KONG_LICENSE_DATA:-}
-    KONG_TRUSTED_IPS: 0.0.0.0/0
-    KONG_REAL_IP_HEADER: X-Forwarded-For
-    KONG_REAL_IP_RECURSIVE: "on"
     KONG_PROXY_ACCESS_LOG: /dev/stdout
     KONG_PROXY_ERROR_LOG: /dev/stderr
 {% if otel.enabled %}

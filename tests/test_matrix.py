@@ -118,3 +118,32 @@ def test_every_compose_service_name_matches_wiring(spec):
         assert ctx.idp.service_name in services
     if ctx.upstream.enabled:
         assert ctx.upstream.service_name in services
+
+
+@pytest.mark.parametrize("spec", VALID_SPECS, ids=_spec_id)
+def test_every_mise_toml_parses(spec):
+    import tomllib
+
+    doc = tomllib.loads(render_all(build_context(spec))["mise.toml"])
+    assert {name.removeprefix("tasks.") for name in doc["tasks"]} == {
+        "up", "down", "reset", "certs", "sync", "diff", "logs", "smoke"
+    }
+
+
+@pytest.mark.parametrize("spec", VALID_SPECS, ids=_spec_id)
+def test_every_deck_env_reference_resolves(spec):
+    # decK は DECK_ 付きの環境変数しか展開しない。参照先が .env に無ければ sync 時に空文字になる
+    ctx = build_context(spec)
+    files = render_all(ctx)
+    body = files.get("config/kong/kong.yaml", "")
+    for alias, source in ctx.deck.env_aliases.items():
+        assert source in ctx.env_vars, source
+        assert f'{alias}="${source}"' in ctx.deck.env_prefix, alias
+    for line in body.splitlines():
+        if '${{ env "' not in line:
+            continue
+        alias = line.split('${{ env "')[1].split('"')[0]
+        assert alias in ctx.deck.env_aliases, alias
+    assert "${AZURE" not in body
+    assert "${KEYCLOAK" not in body
+    assert "LLM_API_KEY" not in body

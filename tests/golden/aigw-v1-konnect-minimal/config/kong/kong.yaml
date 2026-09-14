@@ -22,7 +22,7 @@ services:
             - route_type: llm/v1/chat
               auth:
                 header_name: api-key
-                header_value: ${AZURE_OPENAI_API_KEY}
+                header_value: '${{ env "DECK_AZURE_OPENAI_API_KEY" }}'
               model:
                 provider: azure
                 name: gpt-5-6

@@ -25,16 +25,13 @@ services: []
         config:
           targets:
 {% for provider in spec.ai.providers %}
+{% set provider_auth = deck.provider_auth[loop.index0] %}
 {% for model in provider.models %}
             - route_type: llm/v1/chat
               auth:
-{% if provider.type.value == 'azure' %}
-                header_name: api-key
-                header_value: ${AZURE_OPENAI_API_KEY}
-{% else %}
-                header_name: Authorization
-                header_value: Bearer ${LLM_API_KEY}
-{% endif %}
+{% for key, value in provider_auth.items() %}
+                {{ key }}: {{ value }}
+{% endfor %}
               model:
                 provider: {{ provider.type.value }}
                 name: {{ model.name }}
@@ -50,15 +47,16 @@ services: []
 {% endif %}
 {% endfor %}
 {% endfor %}
-{% if vector.enabled %}
+{% if semantic.cache %}
       - name: ai-semantic-cache
         config:
           embeddings:
             auth:
-              header_name: api-key
-              header_value: ${AZURE_OPENAI_API_KEY}
+{% for key, value in deck.embeddings_auth.items() %}
+              {{ key }}: {{ value }}
+{% endfor %}
             model:
-              provider: openai
+              provider: {{ deck.embeddings_provider }}
               name: {{ spec.ai.embedding_model }}
           vectordb:
             strategy: {{ 'redis' if vector.type.value == 'redis-stack' else 'pgvector' }}
@@ -75,16 +73,17 @@ services: []
               port: {{ vector.port }}
               database: {{ vector.database }}
               user: {{ vector.user }}
+              password: {{ vector.password }}
 {% endif %}
 {% endif %}
 {% if idp.enabled %}
       - name: openid-connect
         config:
-          issuer: {{ idp.issuer }}
+          issuer: '{{ idp.issuer }}'
           client_id:
-            - {{ idp.client_id }}
+            - '{{ idp.client_id }}'
           client_secret:
-            - ${KEYCLOAK_CLIENT_SECRET}
+            - '{{ idp.client_secret }}'
           # decK が明示値なしの sync を拒否するため固定値を設定する
           cache_tokens_salt: local-dev-salt
           auth_methods:
@@ -107,11 +106,11 @@ services: []
     plugins:
       - name: openid-connect
         config:
-          issuer: {{ idp.issuer }}
+          issuer: '{{ idp.issuer }}'
           client_id:
-            - {{ idp.client_id }}
+            - '{{ idp.client_id }}'
           client_secret:
-            - ${KEYCLOAK_CLIENT_SECRET}
+            - '{{ idp.client_secret }}'
           # decK が明示値なしの sync を拒否するため固定値を設定する
           cache_tokens_salt: local-dev-salt
           auth_methods:

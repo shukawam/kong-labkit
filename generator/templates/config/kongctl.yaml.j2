@@ -79,7 +79,7 @@ ai_gateways:
           model:
             name_header: true
           response_streaming: allow
-{% if vector.enabled %}
+{% if semantic.enabled %}
           balancer:
             algorithm: semantic
             embeddings:
@@ -92,6 +92,11 @@ ai_gateways:
               type: {{ 'redis' if vector.type.value == 'redis-stack' else 'pgvector' }}
               host: {{ vector.host }}
               port: {{ vector.port }}
+{% if vector.type.value == 'pgvector' %}
+              database: {{ vector.database }}
+              user: {{ vector.user }}
+              password: {{ vector.password }}
+{% endif %}
               dimensions: {{ vector.dimensions }}
               threshold: {{ vector.threshold }}
               distance_metric: {{ vector.distance_metric }}

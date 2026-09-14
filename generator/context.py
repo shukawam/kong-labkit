@@ -122,6 +122,7 @@ class KongCtx:
     cp_name: str
     konnect_domain: str | None
     konnect_telemetry_domain: str | None
+    konnect_api_url: str | None
     dp_labels: str
 
 
@@ -132,7 +133,13 @@ class IdpCtx:
     realm: str | None
     issuer: str | None
     client_id: str | None
+    # decK は ${VAR} を展開しないため、client secret の参照方法は idp の種類ごとに context が決める
+    client_secret: str | None
     service_name: str | None
+    public_client_id: str | None
+    token_endpoint: str | None
+    test_username: str | None
+    test_password: str | None
 
 
 @dataclass(frozen=True)
@@ -162,6 +169,52 @@ class VectorCtx:
     threshold: float
     database: str
     user: str
+    password: str
+
+
+@dataclass(frozen=True)
+class SemanticCtx:
+    cache: bool
+    routing: bool
+
+    @property
+    def enabled(self) -> bool:
+        return self.cache or self.routing
+
+
+@dataclass(frozen=True)
+class CertsCtx:
+    dir: str
+    basename: str
+    common_name: str
+    days: int
+
+    @property
+    def crt_path(self) -> str:
+        return f"{self.dir}/{self.basename}.crt"
+
+    @property
+    def key_path(self) -> str:
+        return f"{self.dir}/{self.basename}.key"
+
+
+@dataclass(frozen=True)
+class DeckCtx:
+    # DECK_ 付きの環境変数名 -> .env に入っている元の変数名
+    env_aliases: dict[str, str]
+    provider_auth: dict[str, dict[str, str]]
+    embeddings_provider: str | None
+    embeddings_auth: dict[str, str] | None
+
+    @property
+    def env_prefix(self) -> str:
+        """deck の呼び出しに前置する環境変数の割り当て。decK は DECK_ 付きの名前しか見ない。"""
+        if not self.env_aliases:
+            return ""
+        pairs = " ".join(
+            f'{alias}="${source}"' for alias, source in sorted(self.env_aliases.items())
+        )
+        return pairs + " "
 
 
 @dataclass(frozen=True)
@@ -180,6 +233,9 @@ class Ctx:
     cache: CacheCtx
     vector: VectorCtx
     upstream: UpstreamCtx
+    semantic: SemanticCtx
+    certs: CertsCtx
+    deck: DeckCtx
     ports: dict[str, int]
     services: list[str]
     env_vars: dict[str, str]
@@ -194,32 +250,91 @@ def _build_kong(spec: EnvSpec) -> KongCtx:
         cp_name=f"{spec.customer}-{suffix}",
         konnect_domain=f"{spec.region}.cp.konghq.com" if konnect else None,
         konnect_telemetry_domain=f"{spec.region}.tp.konghq.com" if konnect else None,
+        konnect_api_url=f"https://{spec.region}.api.konghq.com" if konnect else None,
         dp_labels=DP_LABELS,
     )
 
 
-def _build_idp(spec: EnvSpec) -> IdpCtx:
+DECK_ENV_PREFIX = "DECK_"
+
+KEYCLOAK_TEST_USER = "tester"
+KEYCLOAK_TEST_PASSWORD = "tester"
+# ローカル検証用の固定値。乱数にするとゴールデンテストが毎回落ちる
+KEYCLOAK_CLIENT_SECRET = "local-dev-secret"
+PGVECTOR_PASSWORD = "kong"
+
+
+class _DeckEnv:
+    """decK から参照する環境変数の名前を決め、必要な別名を集める。
+
+    decK が展開するのは ${{ env "DECK_..." }} だけで、裸の ${VAR} はただの文字列になる。
+    """
+
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self.aliases: dict[str, str] = {}
+
+    def ref(self, source: str) -> str:
+        alias = DECK_ENV_PREFIX + source
+        if self.enabled:
+            self.aliases[alias] = source
+        return '${{ env "' + alias + '" }}'
+
+
+def _yaml_scalar(value: str) -> str:
+    """decK 設定にそのまま置ける YAML スカラにする。${{ }} を裸で書くと flow mapping に見える。"""
+    return "'" + value + "'"
+
+
+def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpCtx:
     if spec.idp.type is IdpType.KEYCLOAK:
+        realm = spec.idp.realm
         return IdpCtx(
             type=IdpType.KEYCLOAK,
             enabled=True,
-            realm=spec.idp.realm,
-            issuer=f"http://keycloak:8080/realms/{spec.idp.realm}",
+            realm=realm,
+            issuer=f"http://keycloak:8080/realms/{realm}",
             client_id=f"{spec.customer}-client",
+            # ローカル固定値なので decK の env 参照にせず実値を埋める。realm-export と出所を 1 つにする
+            client_secret=KEYCLOAK_CLIENT_SECRET,
             service_name="keycloak",
+            public_client_id=f"{spec.customer}-public",
+            token_endpoint=(
+                f"http://localhost:{ports['keycloak']}"
+                f"/realms/{realm}/protocol/openid-connect/token"
+            ),
+            test_username=KEYCLOAK_TEST_USER,
+            test_password=KEYCLOAK_TEST_PASSWORD,
         )
     if spec.idp.type is IdpType.ENTRA_ID:
-        # テナント ID は生成時に判明しないため compose の変数参照のまま Kong に渡す
+        # テナント ID は生成時に判明しないため decK の env 参照として渡す
+        tenant = deck_env.ref("AZURE_TENANT_ID")
         return IdpCtx(
             type=IdpType.ENTRA_ID,
             enabled=True,
             realm=None,
-            issuer="https://login.microsoftonline.com/${AZURE_TENANT_ID}/v2.0",
-            client_id="${AZURE_CLIENT_ID}",
+            issuer=f"https://login.microsoftonline.com/{tenant}/v2.0",
+            client_id=deck_env.ref("AZURE_CLIENT_ID"),
+            client_secret=deck_env.ref("AZURE_CLIENT_SECRET"),
             service_name=None,
+            public_client_id=None,
+            # 無人でトークンを取得する経路が無いため、スモークは応答コードの確認に落とす
+            token_endpoint=None,
+            test_username=None,
+            test_password=None,
         )
     return IdpCtx(
-        type=IdpType.NONE, enabled=False, realm=None, issuer=None, client_id=None, service_name=None
+        type=IdpType.NONE,
+        enabled=False,
+        realm=None,
+        issuer=None,
+        client_id=None,
+        client_secret=None,
+        service_name=None,
+        public_client_id=None,
+        token_endpoint=None,
+        test_username=None,
+        test_password=None,
     )
 
 
@@ -257,6 +372,7 @@ def _build_vector(spec: EnvSpec) -> VectorCtx:
             threshold=0.7,
             database="",
             user="",
+            password="",
         )
 
     model = spec.ai.embedding_model
@@ -267,9 +383,15 @@ def _build_vector(spec: EnvSpec) -> VectorCtx:
         )
 
     if spec.vectordb.type is VectorDbType.REDIS_STACK:
-        host, port, database, user = "redis", 6379, "", ""
+        host, port, database, user, password = "redis", 6379, "", "", ""
     else:
-        host, port, database, user = "pgvector", 5432, "vectors", "kong"
+        host, port, database, user, password = (
+            "pgvector",
+            5432,
+            "vectors",
+            "kong",
+            PGVECTOR_PASSWORD,
+        )
 
     return VectorCtx(
         enabled=True,
@@ -282,6 +404,7 @@ def _build_vector(spec: EnvSpec) -> VectorCtx:
         threshold=0.7,
         database=database,
         user=user,
+        password=password,
     )
 
 
@@ -326,6 +449,7 @@ def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
 
     if spec.control_plane is ControlPlane.KONNECT:
         env["CONTROL_PLANE_ID"] = ""
+        env["KONNECT_PAT"] = ""
     else:
         env["KONG_LICENSE_DATA"] = ""
 
@@ -343,8 +467,7 @@ def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
     if spec.idp.type is IdpType.KEYCLOAK:
         env["KEYCLOAK_ADMIN"] = "admin"
         env["KEYCLOAK_ADMIN_PASSWORD"] = "admin"
-        # ローカル検証用の固定値。乱数にするとゴールデンテストが毎回落ちる
-        env["KEYCLOAK_CLIENT_SECRET"] = "local-dev-secret"
+        env["KEYCLOAK_CLIENT_SECRET"] = KEYCLOAK_CLIENT_SECRET
     elif spec.idp.type is IdpType.ENTRA_ID:
         env["AZURE_TENANT_ID"] = ""
         env["AZURE_CLIENT_ID"] = ""
@@ -353,16 +476,92 @@ def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
     return env
 
 
+def _build_certs(spec: EnvSpec, kong: KongCtx) -> CertsCtx:
+    if spec.control_plane is ControlPlane.KONNECT:
+        return CertsCtx(dir=".certs", basename="cluster", common_name=kong.cp_name, days=1095)
+    return CertsCtx(
+        dir="config/kong/certs",
+        basename="tls",
+        # shared mTLS では Kong が KONG_CLUSTER_SERVER_NAME ではなく固定リテラル kong_clustering と照合する
+        common_name="kong_clustering",
+        days=1095,
+    )
+
+
+def _build_provider_auth(provider, deck_env: _DeckEnv) -> dict[str, str]:
+    if provider.type is ProviderType.AZURE:
+        if provider.auth is AuthType.MANAGED_IDENTITY:
+            return {
+                "azure_use_managed_identity": "true",
+                "azure_client_id": _yaml_scalar(deck_env.ref("AZURE_CLIENT_ID")),
+                "azure_tenant_id": _yaml_scalar(deck_env.ref("AZURE_TENANT_ID")),
+            }
+        return {
+            "header_name": "api-key",
+            "header_value": _yaml_scalar(deck_env.ref("AZURE_OPENAI_API_KEY")),
+        }
+    if provider.type is ProviderType.OPENAI:
+        return {
+            "header_name": "Authorization",
+            "header_value": _yaml_scalar("Bearer " + deck_env.ref("OPENAI_API_KEY")),
+        }
+    if provider.type is ProviderType.ANTHROPIC:
+        return {
+            "header_name": "x-api-key",
+            "header_value": _yaml_scalar(deck_env.ref("ANTHROPIC_API_KEY")),
+        }
+    if provider.type is ProviderType.BEDROCK:
+        return {
+            "aws_access_key_id": _yaml_scalar(deck_env.ref("AWS_ACCESS_KEY_ID")),
+            "aws_secret_access_key": _yaml_scalar(deck_env.ref("AWS_SECRET_ACCESS_KEY")),
+        }
+    return {
+        "gcp_use_service_account": "true",
+        # パスではなくサービスアカウント JSON の中身そのものを渡す必要がある
+        "gcp_service_account_json": _yaml_scalar(
+            deck_env.ref("GOOGLE_APPLICATION_CREDENTIALS")
+        ),
+    }
+
+
+def _build_deck(spec: EnvSpec, deck_env: _DeckEnv) -> DeckCtx:
+    provider_auth = [_build_provider_auth(p, deck_env) for p in spec.ai.providers]
+    first = spec.ai.providers[0] if spec.ai.providers else None
+    return DeckCtx(
+        env_aliases=deck_env.aliases,
+        provider_auth=provider_auth,
+        # 埋め込みモデルは先頭のプロバイダに属するものとして扱う
+        embeddings_provider=first.type.value if first else None,
+        embeddings_auth=provider_auth[0] if provider_auth else None,
+    )
+
+
+def _build_semantic(spec: EnvSpec) -> SemanticCtx:
+    enabled = spec.vectordb.type is not VectorDbType.NONE
+    return SemanticCtx(
+        cache=spec.ai.semantic_cache and enabled,
+        routing=spec.ai.semantic_routing and enabled,
+    )
+
+
 def build_context(spec: EnvSpec) -> Ctx:
+    ports = allocate_ports(spec)
+    kong = _build_kong(spec)
+    # ai-gateway-v2 は kongctl 経路なので decK の別名は要らない
+    deck_env = _DeckEnv(enabled=spec.gateway is not Gateway.AI_GATEWAY_V2)
+    idp = _build_idp(spec, ports, deck_env)
     return Ctx(
         spec=spec,
-        kong=_build_kong(spec),
-        idp=_build_idp(spec),
+        kong=kong,
+        idp=idp,
         otel=_build_otel(spec),
         cache=_build_cache(spec),
         vector=_build_vector(spec),
         upstream=_build_upstream(spec),
-        ports=allocate_ports(spec),
+        semantic=_build_semantic(spec),
+        certs=_build_certs(spec, kong),
+        deck=_build_deck(spec, deck_env),
+        ports=ports,
         services=_build_services(spec),
         env_vars=_build_env_vars(spec),
         namespace=spec.customer,

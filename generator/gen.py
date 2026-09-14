@@ -2,7 +2,6 @@
 # requires-python = ">=3.12"
 # dependencies = ["pydantic>=2.9", "jinja2>=3.1", "pyyaml>=6.0", "click>=8.1"]
 # ///
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -50,9 +49,10 @@ def _is_inside_protected_dir(relpath: str) -> bool:
     return len(parts) > 1 and parts[0] in PROTECTED_PATHS
 
 
-def check_git_clean(out: Path) -> None:
+def check_git_clean(out: Path) -> bool:
+    """git 管理下なら True。未コミットの変更があれば例外。"""
     if not out.exists():
-        return  # 生成先がまだ無いなら未管理と同じ扱いでよい
+        return False  # 生成先がまだ無いなら未管理と同じ扱いでよい
     result = subprocess.run(
         ["git", "status", "--porcelain"],
         cwd=out,
@@ -60,12 +60,21 @@ def check_git_clean(out: Path) -> None:
         text=True,
     )
     if result.returncode != 0:
-        return  # git 管理下でなければ何も言わない
+        return False
     if result.stdout.strip():
         raise DirtyWorktreeError(
             f"{out} に未コミットの変更があります。"
             "--force は生成物を上書きするため、先に commit か stash をしてください。"
         )
+    return True
+
+
+def overwrite_targets(out: Path, files: dict[str, str]) -> list[str]:
+    return [
+        relpath
+        for relpath in sorted(files)
+        if (out / relpath).exists() and not _is_protected(relpath)
+    ]
 
 
 def write_files(out: Path, files: dict[str, str], force: bool) -> WriteResult:
@@ -113,29 +122,41 @@ def main(env_yaml: Path, out: Path, force: bool) -> None:
 
     ctx = build_context(spec)
 
+    files = render_all(ctx)
+    # 入力そのものを残すことで、後から何を選んだかを compose から逆算しなくて済む
+    files["env.yaml"] = env_yaml.read_text(encoding="utf-8")
+
     try:
         if force:
-            check_git_clean(out)
+            if not check_git_clean(out):
+                targets = overwrite_targets(out, files)
+                if targets:
+                    click.echo(
+                        click.style(
+                            f"警告: {out} は git 管理下ではないため上書き内容を復元できません。"
+                            "残したいものがあれば中断してコピーを取るか、git init してコミットしてから実行してください。"
+                            f"上書きするファイル: {', '.join(targets)}",
+                            fg="yellow",
+                        )
+                    )
 
         out.mkdir(parents=True, exist_ok=True)
-        result = write_files(out, render_all(ctx), force=force)
+        result = write_files(out, files, force=force)
     except (DirtyWorktreeError, TargetNotEmptyError) as e:
         click.echo(click.style(str(e), fg="red"))
         sys.exit(1)
 
-    # 入力そのものを残すことで、後から何を選んだかを compose から逆算しなくて済む
-    shutil.copyfile(env_yaml, out / "env.yaml")
-
-    if spec.control_plane.value == "konnect":
-        if not (out / ".certs" / "cluster.crt").exists():
-            generate_cluster_cert(out / ".certs", common_name=ctx.kong.cp_name)
-            result.created.append(out / ".certs" / "cluster.crt")
+    crt = out / ctx.certs.crt_path
+    if crt.exists():
+        result.skipped.append(crt)
     else:
-        cert_dir = out / "config" / "kong" / "certs"
-        if not (cert_dir / "tls.crt").exists():
-            # shared mTLS では Kong が KONG_CLUSTER_SERVER_NAME ではなく固定リテラル kong_clustering（アンダースコア）と照合する
-            generate_cluster_cert(cert_dir, common_name="kong_clustering", basename="tls")
-            result.created.append(cert_dir / "tls.crt")
+        generate_cluster_cert(
+            crt.parent,
+            common_name=ctx.certs.common_name,
+            days=ctx.certs.days,
+            basename=ctx.certs.basename,
+        )
+        result.created.append(crt)
 
     for label, paths, color in (
         ("作成", result.created, "green"),
