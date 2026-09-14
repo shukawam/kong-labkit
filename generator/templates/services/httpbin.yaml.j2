@@ -1,0 +1,6 @@
+httpbin:
+  <<: *default
+  container_name: httpbin
+  image: kennethreitz/httpbin
+  ports:
+    - {{ ports.httpbin }}:80

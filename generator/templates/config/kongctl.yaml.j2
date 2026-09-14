@@ -1,0 +1,119 @@
+_defaults:
+  kongctl:
+    namespace: {{ namespace }}
+
+ai_gateways:
+  - ref: {{ kong.cp_name }}
+    name: {{ kong.cp_name }}
+    display_name: {{ kong.cp_name }}
+    deployment_type: hybrid
+
+    model_providers:
+{% for provider in spec.ai.providers %}
+      - ref: {{ provider.type.value }}
+        ai_gateway: !ref {{ kong.cp_name }}#id
+        name: {{ provider.type.value }}
+        type: {{ provider.type.value }}
+        display_name: {{ provider.type.value }}
+        config:
+{% if provider.instance %}
+          instance: {{ provider.instance }}
+{% endif %}
+{% if provider.region %}
+          region: {{ provider.region }}
+{% endif %}
+{% if provider.type.value == 'azure' and provider.auth.value == 'managed-identity' %}
+          auth:
+            type: azure
+            use_managed_identity: true
+            client_id: !env AZURE_CLIENT_ID
+            tenant_id: !env AZURE_TENANT_ID
+{% elif provider.type.value == 'azure' %}
+          auth:
+            type: basic
+            headers:
+              - name: api-key
+                value: !env AZURE_OPENAI_API_KEY
+{% elif provider.type.value == 'openai' %}
+          auth:
+            type: bearer
+            token: !env OPENAI_API_KEY
+{% elif provider.type.value == 'anthropic' %}
+          auth:
+            type: basic
+            headers:
+              - name: x-api-key
+                value: !env ANTHROPIC_API_KEY
+{% else %}
+          auth:
+            type: {{ provider.type.value }}
+{% endif %}
+{% endfor %}
+
+    models:
+{% for provider in spec.ai.providers %}
+{% for model in provider.models %}
+      - ref: {{ model.name }}
+        ai_gateway: !ref {{ kong.cp_name }}#id
+        name: {{ model.name }}
+        display_name: {{ model.name }}
+        type: model
+        enabled: true
+        capabilities:
+          - generate
+        formats:
+          - type: openai
+        targets:
+          - name: {{ model.name }}
+            provider: {{ provider.type.value }}
+            weight: 100
+            config:
+              type: {{ provider.type.value }}
+{% if model.deployment_id %}
+              deployment_id: {{ model.deployment_id }}
+{% endif %}
+{% if model.api_version %}
+              api_version: {{ model.api_version }}
+{% endif %}
+        config:
+          model:
+            name_header: true
+          response_streaming: allow
+{% if semantic.enabled %}
+          balancer:
+            algorithm: semantic
+            embeddings:
+              name: {{ spec.ai.embedding_model }}
+              provider: {{ provider.type.value }}
+              allow_auth_override: false
+              config:
+                type: {{ provider.type.value }}
+            vectordb:
+              type: {{ 'redis' if vector.type.value == 'redis-stack' else 'pgvector' }}
+              host: {{ vector.host }}
+              port: {{ vector.port }}
+{% if vector.type.value == 'pgvector' %}
+              database: {{ vector.database }}
+              user: {{ vector.user }}
+              password: {{ vector.password }}
+{% endif %}
+              dimensions: {{ vector.dimensions }}
+              threshold: {{ vector.threshold }}
+              distance_metric: {{ vector.distance_metric }}
+{% endif %}
+          route:
+            paths:
+              - /v1/{{ model.name }}
+            protocols:
+              - http
+              - https
+            strip_path: true
+{% endfor %}
+{% endfor %}
+
+    data_plane_certificates:
+      - ref: {{ kong.cp_name }}-cert
+        ai_gateway: !ref {{ kong.cp_name }}#id
+        title: Cluster Certificate
+        description: Cluster certificate for {{ kong.cp_name }}
+        cert: !file .certs/cluster.crt

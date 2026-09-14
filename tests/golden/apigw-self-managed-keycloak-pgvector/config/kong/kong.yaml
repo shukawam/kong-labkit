@@ -1,0 +1,35 @@
+_format_version: "3.0"
+
+services:
+  - name: httpbin
+    url: http://httpbin:80
+    routes:
+      - name: httpbin
+        paths:
+          - /httpbin
+        strip_path: true
+        # 省略すると平文 HTTP が 426 で弾かれる（decK/Kong のルート protocols 既定値は https のみ）
+        protocols:
+          - http
+          - https
+    plugins:
+      - name: openid-connect
+        config:
+          issuer: 'http://keycloak:8080/realms/acme'
+          client_id:
+            - 'acme-client'
+          client_secret:
+            - 'local-dev-secret'
+          # decK が明示値なしの sync を拒否するため固定値を設定する
+          cache_tokens_salt: local-dev-salt
+          auth_methods:
+            - bearer
+            - client_credentials
+
+plugins:
+  - name: opentelemetry
+    config:
+      traces_endpoint: http://otel-lgtm:4318/v1/traces
+      logs_endpoint: http://otel-lgtm:4318/v1/logs
+      resource_attributes:
+        service.name: acme-gateway

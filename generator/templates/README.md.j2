@@ -1,0 +1,94 @@
+# {{ spec.customer }} 検証環境
+
+`env.yaml` から生成された環境です。構成を変えるときは `env.yaml` を編集して再生成してください。
+
+## 構成
+
+| 項目 | 値 |
+|---|---|
+| Gateway | {{ spec.gateway.value }} |
+| Control Plane | {{ spec.control_plane.value }}{% if spec.control_plane.value == 'konnect' %}（{{ kong.cp_name }} / {{ kong.konnect_domain }}）{% endif %} |
+| IdP | {{ spec.idp.type.value }}{% if idp.realm %}（realm: {{ idp.realm }}）{% endif %} |
+| キャッシュ | {{ spec.cache.type.value }} |
+| ベクトル DB | {{ spec.vectordb.type.value }} |
+| Observability | {{ 'otel-lgtm' if otel.enabled else 'なし' }} |
+
+## 前提
+
+必要なツールは docker、mise{% if spec.gateway.value == 'ai-gateway-v2' or spec.control_plane.value == 'konnect' %}、kongctl{% else %}、deck{% endif %} です。
+
+`.env` の次の項目を埋めてから起動してください。
+
+{% for key, value in env_vars.items() %}
+{% if not value %}
+- `{{ key }}`
+{% endif %}
+{% endfor %}
+
+## 初手
+
+{% if spec.control_plane.value == 'konnect' %}
+```bash
+# Konnect の Personal Access Token を発行し（Konnect > 右上のアカウント > Personal Access Tokens）、.env の KONNECT_PAT に書く
+mise run certs                      # {{ certs.dir }}/{{ certs.basename }}.{crt,key} を生成
+# Konnect で {{ kong.cp_name }} を作成し、{{ certs.crt_path }} を登録する
+# 発行された Control Plane ID を .env の CONTROL_PLANE_ID に書く
+mise run up
+mise run sync
+mise run smoke
+```
+{% else %}
+```bash
+mise run certs                      # {{ certs.dir }}/{{ certs.basename }}.{crt,key} を生成
+# .env の KONG_LICENSE_DATA に Kong Enterprise のライセンス JSON を 1 行で入れる
+mise run up
+mise run sync
+mise run smoke
+```
+{% endif %}
+
+## エンドポイント
+
+| 用途 | URL |
+|---|---|
+| Proxy | http://localhost:{{ ports.proxy }} |
+| Status API | http://localhost:{{ ports.status }}/status |
+{% if 'admin' in ports %}
+| Admin API | http://localhost:{{ ports.admin }} |
+| Kong Manager | http://localhost:{{ ports.manager }} |
+{% endif %}
+{% if otel.enabled %}
+| Grafana | http://localhost:{{ ports.grafana }} |
+{% endif %}
+{% if idp.service_name %}
+| Keycloak | http://localhost:{{ ports.keycloak }} |
+{% endif %}
+{% if 'cache' in ports %}
+| Redis | localhost:{{ ports.cache }} |
+{% endif %}
+{% if 'vector_pg' in ports %}
+| pgvector | localhost:{{ ports.vector_pg }} |
+{% endif %}
+{% if upstream.enabled %}
+| httpbin（直接） | http://localhost:{{ ports.httpbin }} |
+{% endif %}
+
+## トラブルシュート
+
+{% if spec.control_plane.value == 'konnect' %}
+**データプレーンが Konnect に繋がらない。** `{{ certs.crt_path }}` を Konnect の Control Plane に登録し忘れている場合がほとんどです。クラスタ証明書を再生成したときは登録もやり直す必要があります。
+
+**`CONTROL_PLANE_ID` が空のまま起動した。** `KONG_CLUSTER_CONTROL_PLANE` が `.{{ kong.konnect_domain }}:443` という形になり、名前解決に失敗します。`.env` を埋めて `mise run reset` してください。
+{% else %}
+**CP が起動直後に落ちる。** `kong migrations bootstrap` が終わる前に CP が起動するとマイグレーション未適用で落ちます。`depends_on` の `service_completed_successfully` で順序は保証していますが、`docker compose up` を個別サービス指定で叩いたときは順序が崩れます。
+
+**ライセンスエラーが出る。** `.env` の `KONG_LICENSE_DATA` に Kong Enterprise のライセンス JSON を 1 行で入れてください。改行が入っていると読めません。
+{% endif %}
+{% if idp.service_name %}
+
+**ブラウザで Keycloak の管理コンソールを開くと動作がおかしい。** `KC_HOSTNAME` を Kong がコンテナ内で検証する issuer（`{{ idp.issuer }}`）に合わせて固定しているため、`http://localhost:{{ ports.keycloak }}` 経由でアクセスしてもページ内のリンクや API 呼び出しは `keycloak:8080` 宛てになります。ブラウザ（ホスト側）はこのホスト名を解決できないため、管理コンソールや認可コードフローをブラウザで直接使いたい場合は `/etc/hosts` に `127.0.0.1 keycloak` を追記してください。`direct access grants`（パスワードグラント）でトークンを取得するだけなら、`http://localhost:{{ ports.keycloak }}` 経由でも発行されるトークンの issuer は Kong の設定と一致するため、この追記は不要です。
+{% endif %}
+{% if vector.enabled and vector.type.value == 'redis-stack' %}
+
+**ベクトル検索が動かない。** `redis:8` ではなく `redis/redis-stack` を使っているか確認してください。素の Redis には検索モジュールが入っていません。
+{% endif %}

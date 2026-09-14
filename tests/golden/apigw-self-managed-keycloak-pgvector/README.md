@@ -1,0 +1,53 @@
+# acme 検証環境
+
+`env.yaml` から生成された環境です。構成を変えるときは `env.yaml` を編集して再生成してください。
+
+## 構成
+
+| 項目 | 値 |
+|---|---|
+| Gateway | api-gateway |
+| Control Plane | self-managed |
+| IdP | keycloak（realm: acme） |
+| キャッシュ | none |
+| ベクトル DB | pgvector |
+| Observability | otel-lgtm |
+
+## 前提
+
+必要なツールは docker、mise、deck です。
+
+`.env` の次の項目を埋めてから起動してください。
+
+- `KONG_LICENSE_DATA`
+
+## 初手
+
+```bash
+mise run certs                      # config/kong/certs/tls.{crt,key} を生成
+# .env の KONG_LICENSE_DATA に Kong Enterprise のライセンス JSON を 1 行で入れる
+mise run up
+mise run sync
+mise run smoke
+```
+
+## エンドポイント
+
+| 用途 | URL |
+|---|---|
+| Proxy | http://localhost:8000 |
+| Status API | http://localhost:8100/status |
+| Admin API | http://localhost:8001 |
+| Kong Manager | http://localhost:8002 |
+| Grafana | http://localhost:3000 |
+| Keycloak | http://localhost:8080 |
+| pgvector | localhost:5433 |
+| httpbin（直接） | http://localhost:8081 |
+
+## トラブルシュート
+
+**CP が起動直後に落ちる。** `kong migrations bootstrap` が終わる前に CP が起動するとマイグレーション未適用で落ちます。`depends_on` の `service_completed_successfully` で順序は保証していますが、`docker compose up` を個別サービス指定で叩いたときは順序が崩れます。
+
+**ライセンスエラーが出る。** `.env` の `KONG_LICENSE_DATA` に Kong Enterprise のライセンス JSON を 1 行で入れてください。改行が入っていると読めません。
+
+**ブラウザで Keycloak の管理コンソールを開くと動作がおかしい。** `KC_HOSTNAME` を Kong がコンテナ内で検証する issuer（`http://keycloak:8080/realms/acme`）に合わせて固定しているため、`http://localhost:8080` 経由でアクセスしてもページ内のリンクや API 呼び出しは `keycloak:8080` 宛てになります。ブラウザ（ホスト側）はこのホスト名を解決できないため、管理コンソールや認可コードフローをブラウザで直接使いたい場合は `/etc/hosts` に `127.0.0.1 keycloak` を追記してください。`direct access grants`（パスワードグラント）でトークンを取得するだけなら、`http://localhost:8080` 経由でも発行されるトークンの issuer は Kong の設定と一致するため、この追記は不要です。

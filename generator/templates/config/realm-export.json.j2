@@ -1,0 +1,60 @@
+{
+  "realm": "{{ idp.realm }}",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "clientScopes": [
+    {
+      "name": "{{ spec.customer }}-scope",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      }
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "{{ idp.client_id }}",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "{{ idp.client_secret }}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "redirectUris": ["http://localhost:{{ ports.proxy }}/*"],
+      "webOrigins": ["*"],
+      "defaultClientScopes": ["openid", "profile", "email", "{{ spec.customer }}-scope"]
+    },
+    {
+      "clientId": "{{ idp.public_client_id }}",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost:{{ ports.proxy }}/*"],
+      "webOrigins": ["*"],
+      "defaultClientScopes": ["openid", "profile", "email", "{{ spec.customer }}-scope"]
+    }
+  ],
+  "users": [
+    {
+      "username": "{{ idp.test_username }}",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "tester@example.com",
+      "firstName": "Test",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "{{ idp.test_password }}",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["default-roles-{{ idp.realm }}"]
+    }
+  ]
+}

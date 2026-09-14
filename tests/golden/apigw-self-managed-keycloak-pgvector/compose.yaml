@@ -1,0 +1,155 @@
+x-default: &default
+  networks:
+    - kong-network
+  restart: on-failure
+
+# 過去に踏んだ罠。expressions でないと新しいルータ構文のルートが動かず、
+# TRUSTED_IPS / REAL_IP を外すと X-Forwarded-For が上流で信用されず元クライアント IP を失う
+x-kong-hardening: &kong-hardening
+  KONG_ROUTER_FLAVOR: expressions
+  KONG_TRUSTED_IPS: 0.0.0.0/0
+  KONG_REAL_IP_HEADER: X-Forwarded-For
+  KONG_REAL_IP_RECURSIVE: "on"
+
+x-kong-env: &kong-env
+  KONG_DATABASE: postgres
+  KONG_PG_HOST: database
+  KONG_PG_PASSWORD: kong
+  KONG_PASSWORD: kong
+
+networks:
+  kong-network:
+
+services:
+  database:
+    <<: *default
+    container_name: database
+    image: postgres:17
+    environment:
+      POSTGRES_USER: kong
+      POSTGRES_DB: kong
+      POSTGRES_PASSWORD: kong
+    ports:
+      - 5432:5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kong"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  kong-bootstrap:
+    <<: *default
+    container_name: kong-bootstrap
+    image: kong/kong-gateway:3.14
+    restart: "no"
+    depends_on:
+      database:
+        condition: service_healthy
+    command: kong migrations bootstrap
+    environment:
+      <<: *kong-env
+      KONG_LICENSE_DATA: ${KONG_LICENSE_DATA:-}
+
+  kong-cp:
+    <<: *default
+    container_name: kong-cp
+    image: kong/kong-gateway:3.14
+    depends_on:
+      kong-bootstrap:
+        condition: service_completed_successfully
+    ports:
+      - 8001:8001
+      - 8002:8002
+    environment:
+      <<: [*kong-env, *kong-hardening]
+      KONG_ROLE: control_plane
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001
+      KONG_ADMIN_GUI_LISTEN: 0.0.0.0:8002
+      KONG_CLUSTER_LISTEN: 0.0.0.0:8005
+      KONG_TELEMETRY_LISTEN: 0.0.0.0:8006
+      KONG_ADMIN_GUI_HOST: http://localhost:8002
+      KONG_CLUSTER_CERT: /etc/kong/certs/tls.crt
+      KONG_CLUSTER_CERT_KEY: /etc/kong/certs/tls.key
+      KONG_UNTRUSTED_LUA: "on"
+      KONG_LICENSE_DATA: ${KONG_LICENSE_DATA:-}
+      KONG_TRACING_INSTRUMENTATIONS: all
+      KONG_TRACING_SAMPLING_RATE: "1.0"
+    volumes:
+      - ./config/kong/certs:/etc/kong/certs
+
+  kong-dp:
+    <<: *default
+    container_name: kong-dp
+    image: kong/kong-gateway:3.14
+    depends_on:
+      kong-bootstrap:
+        condition: service_completed_successfully
+    ports:
+      - 8000:8000
+      - 8100:8100
+    environment:
+      <<: *kong-hardening
+      KONG_ROLE: data_plane
+      KONG_DATABASE: "off"
+      KONG_CLUSTER_MTLS: shared
+      KONG_CLUSTER_CONTROL_PLANE: kong-cp:8005
+      KONG_CLUSTER_SERVER_NAME: kong-cluster
+      KONG_CLUSTER_TELEMETRY_ENDPOINT: kong-cp:8006
+      KONG_CLUSTER_TELEMETRY_SERVER_NAME: kong-cp
+      KONG_CLUSTER_CERT: /etc/kong/certs/tls.crt
+      KONG_CLUSTER_CERT_KEY: /etc/kong/certs/tls.key
+      KONG_STATUS_LISTEN: 0.0.0.0:8100
+      KONG_UNTRUSTED_LUA: "on"
+      KONG_LOG_LEVEL: debug
+      KONG_LICENSE_DATA: ${KONG_LICENSE_DATA:-}
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_TRACING_INSTRUMENTATIONS: all
+      KONG_TRACING_SAMPLING_RATE: "1.0"
+    volumes:
+      - ./config/kong/certs:/etc/kong/certs
+  httpbin:
+    <<: *default
+    container_name: httpbin
+    image: kennethreitz/httpbin
+    ports:
+      - 8081:80
+  pgvector:
+    <<: *default
+    container_name: pgvector
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: vectors
+      POSTGRES_USER: kong
+      POSTGRES_PASSWORD: kong
+    ports:
+      - 5433:5432
+    volumes:
+      - ./config/pgvector/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kong -d vectors"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  keycloak:
+    <<: *default
+    container_name: keycloak
+    image: quay.io/keycloak/keycloak:26.6.1
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # localhost にすると Kong がコンテナ内から検証する issuer（http://keycloak:8080/...）と食い違いトークンが 401 になる
+      KC_HOSTNAME: http://keycloak:8080
+    ports:
+      - 8080:8080
+    volumes:
+      - ./config/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+  otel-lgtm:
+    <<: *default
+    container_name: otel-lgtm
+    image: grafana/otel-lgtm:0.25.0
+    ports:
+      - 3000:3000
+      - 4317:4317
+      - 4318:4318

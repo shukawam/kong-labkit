@@ -1,0 +1,86 @@
+[tasks.up]
+description = "環境を起動する"
+run = "docker compose up -d"
+
+[tasks.down]
+description = "環境を停止する"
+run = "docker compose down"
+
+[tasks.reset]
+description = "ボリュームごと作り直す"
+run = """
+docker compose down -v
+docker compose up -d
+"""
+
+[tasks.certs]
+description = "クラスタ証明書を再生成する"
+run = '''
+mkdir -p {{ certs.dir }}
+openssl req -new -x509 -nodes -newkey rsa:2048 \
+  -subj "/CN={{ certs.common_name }}/C=JP" \
+  -addext "subjectAltName=DNS:{{ certs.common_name }}" \
+  -keyout {{ certs.key_path }} -out {{ certs.crt_path }} -days {{ certs.days }}
+chmod 600 {{ certs.key_path }}
+{% if spec.control_plane.value == 'konnect' %}
+echo "生成しました。Konnect の Control Plane に {{ certs.crt_path }} を登録してください。"
+{% endif %}
+'''
+
+[tasks.sync]
+description = "宣言的設定を適用する"
+{% if spec.gateway.value == 'ai-gateway-v2' %}
+run = 'KONGCTL_KONNECT_PAT="$KONNECT_PAT" kongctl sync konnect -f config/kongctl.yaml --auto-approve'
+{% elif spec.control_plane.value == 'konnect' %}
+run = '{{ deck.env_prefix }}deck gateway sync config/kong/kong.yaml --konnect-token "$KONNECT_PAT" --konnect-addr {{ kong.konnect_api_url }} --konnect-control-plane-name {{ kong.cp_name }}'
+{% else %}
+run = '{{ deck.env_prefix }}deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:{{ ports.admin }}'
+{% endif %}
+
+[tasks.diff]
+description = "宣言的設定の差分を見る"
+{% if spec.gateway.value == 'ai-gateway-v2' %}
+run = 'KONGCTL_KONNECT_PAT="$KONNECT_PAT" kongctl diff konnect -f config/kongctl.yaml'
+{% elif spec.control_plane.value == 'konnect' %}
+run = '{{ deck.env_prefix }}deck gateway diff config/kong/kong.yaml --konnect-token "$KONNECT_PAT" --konnect-addr {{ kong.konnect_api_url }} --konnect-control-plane-name {{ kong.cp_name }}'
+{% else %}
+run = '{{ deck.env_prefix }}deck gateway diff config/kong/kong.yaml --kong-addr http://localhost:{{ ports.admin }}'
+{% endif %}
+
+[tasks.logs]
+description = "ログを追う。サービス名を引数で渡せる"
+run = 'docker compose logs -f {% raw %}{{arg(name="service", default="")}}{% endraw %}'
+
+[tasks.smoke]
+description = "主要経路を叩いて疎通を確認する"
+run = '''
+set -e
+{% if spec.gateway.value == 'ai-gateway-v2' %}
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:{{ ports.status }}/status
+{% for provider in spec.ai.providers %}
+{% for model in provider.models %}
+curl -sS -f -X POST http://localhost:{{ ports.proxy }}/v1/{{ model.name }}/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"ping"}]}' > /dev/null
+{% endfor %}
+{% endfor %}
+{% elif upstream.enabled and idp.token_endpoint %}
+TOKEN=$(curl -sS -f -X POST {{ idp.token_endpoint }} \
+  -d grant_type=password -d client_id={{ idp.public_client_id }} \
+  -d username={{ idp.test_username }} -d password={{ idp.test_password }} \
+  | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+test -n "$TOKEN"
+curl -sS -f -H "Authorization: Bearer $TOKEN" \
+  http://localhost:{{ ports.proxy }}/{{ upstream.service_name }}/status/200 > /dev/null
+{% elif upstream.enabled and idp.enabled %}
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:{{ ports.proxy }}/{{ upstream.service_name }}/status/200
+{% elif upstream.enabled %}
+curl -sS -f http://localhost:{{ ports.proxy }}/{{ upstream.service_name }}/status/200 > /dev/null
+{% else %}
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:{{ ports.status }}/status
+{% endif %}
+echo "smoke: OK"
+'''
+
+[env]
+mise.file = ".env"

@@ -1,0 +1,30 @@
+x-default: &default
+  networks:
+    - kong-network
+  restart: on-failure
+
+# 過去に踏んだ罠。expressions でないと新しいルータ構文のルートが動かず、
+# TRUSTED_IPS / REAL_IP を外すと X-Forwarded-For が上流で信用されず元クライアント IP を失う
+x-kong-hardening: &kong-hardening
+  KONG_ROUTER_FLAVOR: expressions
+  KONG_TRUSTED_IPS: 0.0.0.0/0
+  KONG_REAL_IP_HEADER: X-Forwarded-For
+  KONG_REAL_IP_RECURSIVE: "on"
+{% if spec.control_plane.value == 'self-managed' %}
+
+x-kong-env: &kong-env
+  KONG_DATABASE: postgres
+  KONG_PG_HOST: database
+  KONG_PG_PASSWORD: kong
+  KONG_PASSWORD: kong
+{% endif %}
+
+networks:
+  kong-network:
+
+services:
+{% for service in services %}
+{% filter indent(width=2, first=True) %}
+{% include 'services/' ~ service ~ '.yaml.j2' %}
+{% endfilter %}
+{% endfor %}
