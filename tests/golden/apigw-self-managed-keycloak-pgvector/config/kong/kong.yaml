@@ -16,6 +16,8 @@ services:
             - acme-client
           client_secret:
             - ${KEYCLOAK_CLIENT_SECRET}
+          # decK が明示値なしの sync を拒否するため固定値を設定する
+          cache_tokens_salt: local-dev-salt
           auth_methods:
             - bearer
             - client_credentials
