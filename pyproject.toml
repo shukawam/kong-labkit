@@ -10,6 +10,7 @@ dev = ["pytest>=8.3"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "-m 'not slow'"
 markers = [
     "docker: docker コマンドを必要とするテスト",
     "slow: コンテナを起動するテスト",
