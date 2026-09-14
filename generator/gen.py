@@ -133,7 +133,8 @@ def main(env_yaml: Path, out: Path, force: bool) -> None:
     else:
         cert_dir = out / "config" / "kong" / "certs"
         if not (cert_dir / "tls.crt").exists():
-            generate_cluster_cert(cert_dir, common_name="kong-cluster", basename="tls")
+            # shared mTLS では Kong が KONG_CLUSTER_SERVER_NAME ではなく固定リテラル kong_clustering（アンダースコア）と照合する
+            generate_cluster_cert(cert_dir, common_name="kong_clustering", basename="tls")
             result.created.append(cert_dir / "tls.crt")
 
     for label, paths, color in (

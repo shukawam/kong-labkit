@@ -126,8 +126,18 @@ def test_cli_generates_shared_certs_for_self_managed(tmp_path):
     )
     out = tmp_path / "out"
     CliRunner().invoke(main, [str(env_yaml), "-o", str(out)])
-    assert (out / "config/kong/certs/tls.crt").exists()
+    crt = out / "config/kong/certs/tls.crt"
+    assert crt.exists()
     assert not (out / ".certs").exists()
+
+    subject = subprocess.run(
+        ["openssl", "x509", "-in", str(crt), "-noout", "-subject"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    # shared mTLS は CN をこの固定リテラルとしか照合しないため、CN が一致しないと CP-DP 間の接続が確立しない
+    assert "CN=kong_clustering" in subject
 
 
 def test_cli_reports_validation_error_without_traceback(tmp_path):
