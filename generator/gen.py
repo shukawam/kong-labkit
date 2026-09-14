@@ -51,6 +51,8 @@ def _is_inside_protected_dir(relpath: str) -> bool:
 
 
 def check_git_clean(out: Path) -> None:
+    if not out.exists():
+        return  # 生成先がまだ無いなら未管理と同じ扱いでよい
     result = subprocess.run(
         ["git", "status", "--porcelain"],
         cwd=out,
@@ -111,11 +113,15 @@ def main(env_yaml: Path, out: Path, force: bool) -> None:
 
     ctx = build_context(spec)
 
-    if force:
-        check_git_clean(out)
+    try:
+        if force:
+            check_git_clean(out)
 
-    out.mkdir(parents=True, exist_ok=True)
-    result = write_files(out, render_all(ctx), force=force)
+        out.mkdir(parents=True, exist_ok=True)
+        result = write_files(out, render_all(ctx), force=force)
+    except (DirtyWorktreeError, TargetNotEmptyError) as e:
+        click.echo(click.style(str(e), fg="red"))
+        sys.exit(1)
 
     # 入力そのものを残すことで、後から何を選んだかを compose から逆算しなくて済む
     shutil.copyfile(env_yaml, out / "env.yaml")

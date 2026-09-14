@@ -157,3 +157,39 @@ def test_cli_lists_paths_not_counts(tmp_path):
     result = CliRunner().invoke(main, [str(env_yaml), "-o", str(tmp_path / "out")])
     assert "compose.yaml" in result.output
     assert "mise.toml" in result.output
+
+
+def test_cli_force_into_missing_directory_does_not_traceback(tmp_path):
+    # out がまだ無い状態で --force を付けても check_git_clean が FileNotFoundError で落ちてはいけない
+    env_yaml = tmp_path / "acme.yaml"
+    env_yaml.write_text("customer: acme\ngateway: api-gateway\n", encoding="utf-8")
+    out = tmp_path / "does-not-exist-yet"
+    result = CliRunner().invoke(main, [str(env_yaml), "-o", str(out), "--force"])
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output
+    assert (out / "compose.yaml").exists()
+
+
+def test_cli_refuses_non_empty_directory_without_force(tmp_path):
+    env_yaml = tmp_path / "acme.yaml"
+    env_yaml.write_text("customer: acme\ngateway: api-gateway\n", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "compose.yaml").write_text("existing\n")
+    result = CliRunner().invoke(main, [str(env_yaml), "-o", str(out)])
+    assert result.exit_code == 1
+    assert "--force" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_cli_refuses_dirty_git_worktree_with_force(tmp_path):
+    env_yaml = tmp_path / "acme.yaml"
+    env_yaml.write_text("customer: acme\ngateway: api-gateway\n", encoding="utf-8")
+    out = tmp_path / "out"
+    out.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=out, check=True)
+    (out / "compose.yaml").write_text("existing\n")  # コミットしない未追跡ファイル = dirty
+    result = CliRunner().invoke(main, [str(env_yaml), "-o", str(out), "--force"])
+    assert result.exit_code == 1
+    assert "commit か stash" in result.output
+    assert "Traceback" not in result.output
