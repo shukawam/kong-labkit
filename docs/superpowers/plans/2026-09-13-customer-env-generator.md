@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 作業ディレクトリは `~/customer/template`。spec と本計画をコミットした時点で git リポジトリとして初期化済み。`--force` の保護設計が git のクリーン判定に依存しているため、この前提は崩さないこと。
+- 作業ディレクトリは `~/customer/_generator`。spec と本計画をコミットした時点で git リポジトリとして初期化済み。`--force` の保護設計が git のクリーン判定に依存しているため、この前提は崩さないこと。
 - v1 のスコープは `target: compose` のみ。`kubernetes` / `cloud-run` / `aca` はスキーマに存在させた上で unsupported エラーを返す。
 - Python は 3.12 以上（`StrEnum` を使う）。
 - `gen.py` は PEP 723 の inline script metadata を持ち、`uv run generator/gen.py` で依存解決から実行まで完結する。
@@ -29,7 +29,7 @@
 ## File Structure
 
 ```
-~/customer/template/
+~/customer/_generator/
 ├── .gitignore
 ├── README.md                        # ジェネレータ自身の使い方とオプション一覧
 ├── pyproject.toml                   # pytest 設定と dev 依存のみ
@@ -96,7 +96,7 @@
 - [ ] **Step 1: git リポジトリを初期化し、骨組みのファイルを置く**
 
 ```bash
-cd ~/customer/template
+cd ~/customer/_generator
 mkdir -p generator/templates/services generator/templates/config examples tests/golden
 touch generator/__init__.py
 cat > .gitignore <<'EOF'
