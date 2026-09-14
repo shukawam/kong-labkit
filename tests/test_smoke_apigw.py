@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -28,6 +29,34 @@ idp:
   realm: smoke
 upstream: httpbin
 """
+
+
+def _fetch_access_token(cwd: Path) -> str:
+    # spec: idp 有効時は upstream を openid-connect で保護する仕様なので、匿名アクセスは 401 になるのが正しい。
+    # httpbin への到達確認には direct access grants で取ったトークンを使う。
+    result = subprocess.run(
+        [
+            "curl",
+            "-sS",
+            "-f",
+            "-X",
+            "POST",
+            "http://localhost:8080/realms/smoke/protocol/openid-connect/token",
+            "-d",
+            "grant_type=password",
+            "-d",
+            "client_id=smoke-public",
+            "-d",
+            "username=tester",
+            "-d",
+            "password=tester",
+        ],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)["access_token"]
 
 
 def _wait_for(cmd: list[str], cwd: Path, timeout: int = 240) -> None:
@@ -97,10 +126,46 @@ def test_deck_sync_applies_declarative_config(running_env):
     assert result.returncode == 0, result.stderr
 
 
-def test_proxy_returns_200_through_httpbin(running_env):
-    # deck sync が先に走っている必要があるため、同一モジュール内の実行順に依存する
+def test_proxy_rejects_anonymous_request(running_env):
+    # deck sync が先に走っている必要があるため、同一モジュール内の実行順に依存する。
+    # sync 直後は DP への配布が伝播しきっておらず 404（ルート未配布）が一時的に返るため、401 になるまで待つ。
+    deadline = time.time() + 60
+    code = None
+    while time.time() < deadline:
+        result = subprocess.run(
+            [
+                "curl",
+                "-sS",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "http://localhost:8000/httpbin/status/200",
+            ],
+            cwd=running_env,
+            capture_output=True,
+            text=True,
+        )
+        code = result.stdout
+        if code == "401":
+            return
+        time.sleep(2)
+    raise AssertionError(f"匿名アクセスが 401 になりませんでした（最後の応答コード: {code}）")
+
+
+def test_proxy_returns_200_through_httpbin_with_valid_token(running_env):
+    token = _fetch_access_token(running_env)
     _wait_for(
-        ["curl", "-sS", "-f", "-o", "/dev/null", "http://localhost:8000/httpbin/status/200"],
+        [
+            "curl",
+            "-sS",
+            "-f",
+            "-o",
+            "/dev/null",
+            "-H",
+            f"Authorization: Bearer {token}",
+            "http://localhost:8000/httpbin/status/200",
+        ],
         cwd=running_env,
         timeout=60,
     )

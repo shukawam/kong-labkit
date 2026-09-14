@@ -50,4 +50,4 @@ mise run smoke
 
 **ライセンスエラーが出る。** `.env` の `KONG_LICENSE_DATA` に Kong Enterprise のライセンス JSON を 1 行で入れてください。改行が入っていると読めません。
 
-**トークン検証が issuer 不一致で落ちる。** `KC_HOSTNAME` は `http://localhost:8080` ですが、Kong がコンテナ内から見る issuer は `http://keycloak:8080/realms/acme` です。ブラウザから取得したトークンを Kong に渡すときに issuer がずれるため、テストは `direct access grants`（パスワードグラント）でコンテナ内の URL から取得するのが確実です。
+**ブラウザで Keycloak の管理コンソールを開くと動作がおかしい。** `KC_HOSTNAME` を Kong がコンテナ内で検証する issuer（`http://keycloak:8080/realms/acme`）に合わせて固定しているため、`http://localhost:8080` 経由でアクセスしてもページ内のリンクや API 呼び出しは `keycloak:8080` 宛てになります。ブラウザ（ホスト側）はこのホスト名を解決できないため、管理コンソールや認可コードフローをブラウザで直接使いたい場合は `/etc/hosts` に `127.0.0.1 keycloak` を追記してください。`direct access grants`（パスワードグラント）でトークンを取得するだけなら、`http://localhost:8080` 経由でも発行されるトークンの issuer は Kong の設定と一致するため、この追記は不要です。

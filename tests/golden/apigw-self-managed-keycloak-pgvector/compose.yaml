@@ -133,7 +133,8 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
-      KC_HOSTNAME: http://localhost:8080
+      # localhost にすると Kong がコンテナ内から検証する issuer（http://keycloak:8080/...）と食い違いトークンが 401 になる
+      KC_HOSTNAME: http://keycloak:8080
     ports:
       - 8080:8080
     volumes:

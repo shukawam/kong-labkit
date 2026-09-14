@@ -85,7 +85,7 @@ mise run smoke
 {% endif %}
 {% if idp.service_name %}
 
-**トークン検証が issuer 不一致で落ちる。** `KC_HOSTNAME` は `http://localhost:{{ ports.keycloak }}` ですが、Kong がコンテナ内から見る issuer は `{{ idp.issuer }}` です。ブラウザから取得したトークンを Kong に渡すときに issuer がずれるため、テストは `direct access grants`（パスワードグラント）でコンテナ内の URL から取得するのが確実です。
+**ブラウザで Keycloak の管理コンソールを開くと動作がおかしい。** `KC_HOSTNAME` を Kong がコンテナ内で検証する issuer（`{{ idp.issuer }}`）に合わせて固定しているため、`http://localhost:{{ ports.keycloak }}` 経由でアクセスしてもページ内のリンクや API 呼び出しは `keycloak:8080` 宛てになります。ブラウザ（ホスト側）はこのホスト名を解決できないため、管理コンソールや認可コードフローをブラウザで直接使いたい場合は `/etc/hosts` に `127.0.0.1 keycloak` を追記してください。`direct access grants`（パスワードグラント）でトークンを取得するだけなら、`http://localhost:{{ ports.keycloak }}` 経由でも発行されるトークンの issuer は Kong の設定と一致するため、この追記は不要です。
 {% endif %}
 {% if vector.enabled and vector.type.value == 'redis-stack' %}
 
