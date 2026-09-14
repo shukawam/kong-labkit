@@ -25,6 +25,9 @@ def generate_cluster_cert(
         "rsa:2048",
         "-subj",
         f"/CN={common_name}/C=JP",
+        # SAN が無いと CP-DP 間の mTLS で host mismatch になる
+        "-addext",
+        f"subjectAltName=DNS:{common_name}",
         "-keyout",
         str(key),
         "-out",
