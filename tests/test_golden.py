@@ -10,8 +10,18 @@ ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = sorted((ROOT / "examples").glob("*.yaml"))
 
 
-def test_examples_exist():
-    assert len(EXAMPLES) == 4, [e.name for e in EXAMPLES]
+# gateway x control_plane の全組み合わせ。ここが欠けると、その環境は golden で一度も生成されない
+MINIMALS = {
+    "aigw-v2-konnect-minimal",
+    "aigw-v1-konnect-minimal",
+    "aigw-v1-self-managed-minimal",
+    "apigw-konnect-minimal",
+    "apigw-self-managed-minimal",
+}
+
+
+def test_every_environment_has_a_minimal():
+    assert MINIMALS <= {e.stem for e in EXAMPLES}
 
 
 @pytest.mark.parametrize("example", EXAMPLES, ids=lambda p: p.stem)

@@ -1,0 +1,6 @@
+_defaults:
+  kongctl:
+    namespace: acme
+
+# self-managed の Control Plane は compose.yaml で作成するため、Konnect リソースは定義しません。
+# Gateway 設定は config/kong/kong.yaml を mise run sync で適用します。

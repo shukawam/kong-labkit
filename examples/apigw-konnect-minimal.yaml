@@ -1,10 +1,6 @@
 # yaml-language-server: $schema=../schemas/env.schema.json
 customer: acme
 gateway: api-gateway
-control_plane: self-managed
-
-idp:
-  type: keycloak
-  realm: acme
+control_plane: konnect
 
 upstream: httpbin

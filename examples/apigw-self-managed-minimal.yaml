@@ -3,8 +3,4 @@ customer: acme
 gateway: api-gateway
 control_plane: self-managed
 
-idp:
-  type: keycloak
-  realm: acme
-
 upstream: httpbin

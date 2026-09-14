@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../schemas/env.schema.json
 customer: acme
-gateway: ai-gateway-v1
+gateway: ai-gateway-v2
 control_plane: konnect
 
 ai:
@@ -14,17 +14,7 @@ ai:
           api_version: 2024-12-01-preview
 
 idp:
-  type: ldap
-  users:
-    - name: developer
-      email: developer@example.com
-      groups:
-        - developer-dep
-    - name: researcher
-      email: researcher@example.com
-      groups:
-        - developer-dep
-        - researcher-dep
+  type: none
 
 cache:
   type: none

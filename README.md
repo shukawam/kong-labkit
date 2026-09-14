@@ -1,4 +1,6 @@
-# 顧客デリバリー用 再現環境ジェネレータ
+# kong-labkit
+
+Generate reproducible Kong environments from a single YAML file.
 
 `env.yaml` に構成を宣言すると、そのまま `mise run up` が通る Kong の検証環境一式を生成します。
 
@@ -15,7 +17,7 @@ cd ~/customer/acme
 # README.md の初手に従う
 ```
 
-`mise run generate acme` は `uv run generator/gen.py customer/acme.yaml -o ~/customer/acme` を実行します。たとえば `mise run generate aozora-bank` は `customer/aozora-bank.yaml` を読み、`~/customer/aozora-bank` に出力します。これらのコマンドは template プロジェクト内で実行してください。
+`mise run generate acme` は `uv run generator/gen.py customer/acme.yaml -o ~/customer/acme` を実行します。たとえば `mise run generate aozora-bank` は `customer/aozora-bank.yaml` を読み、`~/customer/aozora-bank` に出力します。これらのコマンドは kong-labkit プロジェクト内で実行してください。
 
 ```bash
 mise run generate acme --out ~/customer/acme-test  # 出力先を変更
@@ -26,6 +28,28 @@ mise run generate --help                         # 引数とオプションを�
 既存の環境にテンプレートの改善を再適用するときは `--force` を付けます。生成先が git 管理下で未コミットの変更があるときは拒否されるので、先に commit するか stash してください。`.env` と `.certs/` と `docs/` は `--force` でも上書きされません。顧客ごとの入力を置く `customer/` は、このリポジトリでは git 管理対象外です。
 
 すべての構成で `config/kongctl.yaml` を生成します。Konnect 構成では `mise run sync` が Control Plane（AI Gateway v2 では AI Gateway）を作成し、generator がローカルで作成した `.certs/cluster.crt` を登録します。API Gateway と AI Gateway v1 の Gateway 設定は、kongctl の decK 連携で適用します。self-managed 構成では `kongctl.yaml` に Konnect リソースを定義せず、Control Plane は Docker Compose、Gateway 設定は decK で管理します。
+
+## 例
+
+`examples/` には gateway × control_plane の組み合わせごとに minimal を置いてあります。まずこれを写して、必要な機能だけ足していくのが想定している使い方です。
+
+各 example の先頭には `# yaml-language-server: $schema=../schemas/env.schema.json` が入っています。`schemas/env.schema.json` は `generator/schema.py` から生成した JSON Schema で、`customer/` も `examples/` と同階層なのでコピーしたファイルでもそのまま補完と検証が効きます。表せるのはキーと値の候補までで、`ai-gateway-v2` × `self-managed` のような組み合わせの検証は生成時に行われます。スキーマを変えたら `uv run python scripts/update_schema.py` で再生成してください（忘れるとテストが落ちます）。
+
+| ファイル | gateway | control_plane |
+|---|---|---|
+| `aigw-v2-konnect-minimal.yaml` | `ai-gateway-v2` | `konnect` |
+| `aigw-v1-konnect-minimal.yaml` | `ai-gateway-v1` | `konnect` |
+| `aigw-v1-self-managed-minimal.yaml` | `ai-gateway-v1` | `self-managed` |
+| `apigw-konnect-minimal.yaml` | `api-gateway` | `konnect` |
+| `apigw-self-managed-minimal.yaml` | `api-gateway` | `self-managed` |
+
+minimal からの差分が 1 テーマに絞られた応用例もあります。
+
+| ファイル | minimal との差分 |
+|---|---|
+| `aigw-v2-konnect-redis-stack.yaml` | semantic cache を redis-stack で有効にする |
+| `aigw-v1-konnect-lldap.yaml` | lldap を IdP として同梱する |
+| `apigw-self-managed-keycloak.yaml` | Keycloak を IdP として同梱する |
 
 ## オプション
 

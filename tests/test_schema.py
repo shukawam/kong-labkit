@@ -1,8 +1,13 @@
+import sys
+from pathlib import Path
+
 import pytest
 import yaml
 from pydantic import ValidationError
 
 from generator.schema import ControlPlane, EnvSpec, Gateway, UpstreamType, load_spec
+
+ROOT = Path(__file__).resolve().parents[1]
 
 MINIMAL = {
     "customer": "acme",
@@ -147,3 +152,21 @@ def test_load_spec_reads_yaml(tmp_path):
     spec = load_spec(path)
     assert spec.customer == "acme"
     assert spec.gateway is Gateway.API_GATEWAY
+
+
+def test_json_schema_is_up_to_date():
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from update_schema import SCHEMA, build
+
+    assert SCHEMA.read_text(encoding="utf-8") == build(), (
+        "schemas/env.schema.json が generator/schema.py と食い違っています。"
+        "uv run python scripts/update_schema.py で更新してください。"
+    )
+
+
+@pytest.mark.parametrize(
+    "example", sorted((ROOT / "examples").glob("*.yaml")), ids=lambda p: p.stem
+)
+def test_examples_declare_schema(example):
+    first = example.read_text(encoding="utf-8").splitlines()[0]
+    assert first == "# yaml-language-server: $schema=../schemas/env.schema.json"

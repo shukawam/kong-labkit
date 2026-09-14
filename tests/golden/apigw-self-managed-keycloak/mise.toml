@@ -29,6 +29,7 @@ description = "証明書の用意から環境の起動までを通しで行う"
 run = '''
 set -euo pipefail
 
+
 if [ ! -f config/kong/certs/tls.crt ]; then
   mise run certs
 fi
@@ -50,11 +51,19 @@ echo "起動しました。mise run smoke で疎通を確認してください�
 
 [tasks.sync]
 description = "宣言的設定を適用する"
-run = 'deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:8001'
+run = '''
+set -euo pipefail
+
+deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:8001
+'''
 
 [tasks.diff]
 description = "宣言的設定の差分を見る"
-run = 'deck gateway diff config/kong/kong.yaml --kong-addr http://localhost:8001'
+run = '''
+set -euo pipefail
+
+deck gateway diff config/kong/kong.yaml --kong-addr http://localhost:8001
+'''
 
 [tasks.logs]
 description = "ログを追う。サービス名を引数で渡せる"
