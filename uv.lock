@@ -30,7 +30,7 @@ wheels = [
 ]
 
 [[package]]
-name = "customer-env-generator"
+name = "kong-labkit"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

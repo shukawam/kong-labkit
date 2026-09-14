@@ -29,6 +29,8 @@ echo "生成しました。mise run sync で .certs/cluster.crt を Konnect に�
 description = "証明書の用意から環境の起動までを通しで行う"
 run = '''
 set -euo pipefail
+: "${AZURE_OPENAI_API_KEY:?Set AZURE_OPENAI_API_KEY in .env}"
+
 
 if [ ! -f .certs/cluster.crt ]; then
   mise run certs
@@ -64,11 +66,21 @@ echo "起動しました。mise run smoke で疎通を確認してください�
 
 [tasks.sync]
 description = "宣言的設定を適用する"
-run = 'DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve'
+run = '''
+set -euo pipefail
+: "${AZURE_OPENAI_API_KEY:?Set AZURE_OPENAI_API_KEY in .env}"
+
+DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve
+'''
 
 [tasks.diff]
 description = "宣言的設定の差分を見る"
-run = 'DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT"'
+run = '''
+set -euo pipefail
+: "${AZURE_OPENAI_API_KEY:?Set AZURE_OPENAI_API_KEY in .env}"
+
+DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT"
+'''
 
 [tasks.logs]
 description = "ログを追う。サービス名を引数で渡せる"
@@ -80,9 +92,12 @@ run = '''
 set -e
 code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"ping"}]}')
 test "$code" = "401"
-# 上流の資格情報の正否とは切り離し、LDAP の bind が通ったことだけを見る
-code=$(curl -sS -o /dev/null -w '%{http_code}' -u developer:developer-password -X POST http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"ping"}]}')
-test "$code" != "401"
+# 認証に加え、AI Proxy と上流の疎通も検証する。502 を成功扱いしない
+code=$(curl -sS --max-time 60 -o /dev/null -w '%{http_code}' -H 'Authorization: ldap ZGV2ZWxvcGVyOmRldmVsb3Blci1wYXNzd29yZA==' -X POST http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"ping"}]}')
+if [ "$code" != "200" ]; then
+  echo "smoke: authenticated chat request returned HTTP $code (expected 200)" >&2
+  exit 1
+fi
 echo "smoke: OK"
 '''
 

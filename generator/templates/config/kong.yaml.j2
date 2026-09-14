@@ -23,6 +23,7 @@ _format_version: "3.0"
           ldap_password: {{ idp.ldap.bind_password }}
           base_dn: {{ idp.ldap.users_dn }}
           attribute: {{ idp.ldap.attribute }}
+          header_type: ldap
           # lldap は平文 LDAP のみを listen する
           ldaps: false
           start_tls: false

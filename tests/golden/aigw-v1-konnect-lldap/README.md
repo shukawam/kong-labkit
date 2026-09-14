@@ -60,10 +60,14 @@ mise run smoke                     # Data Plane が Konnect に繋がるまで�
 
 **`CONTROL_PLANE_ID` が空のまま起動した。** `KONG_CLUSTER_CONTROL_PLANE` が `.us.cp.konghq.com:443` という形になり、名前解決に失敗します。`.env` を埋めて `mise run reset` してください。
 
-**LDAP 認証の通し方。** `ldap-auth-advanced` は `Authorization: Basic` を見るので、`curl -u developer:developer-password` で通ります。bind は `cn=admin,ou=people,dc=acme,dc=local` で行い、`ou=people,dc=acme,dc=local` を `uid` で検索します。lldap の管理 UI には `admin` / `.env` の `LLDAP_ADMIN_PASSWORD` でログインできます。
+**LDAP 認証の通し方。** `header_type: ldap` を指定しているため、`curl -H 'Authorization: ldap ZGV2ZWxvcGVyOmRldmVsb3Blci1wYXNzd29yZA=='` で認証情報を送ります。ヘッダーの値は `developer:developer-password` を Base64 化したものです。`curl -u` は Basic 認証を送るため、この設定では使えません。bind は `cn=admin,ou=people,dc=acme,dc=local` で行い、`ou=people,dc=acme,dc=local` を `uid` で検索します。lldap の管理 UI には `admin` / `.env` の `LLDAP_ADMIN_PASSWORD` でログインできます。
 
 **テストユーザーが存在しない。** `lldap-bootstrap` は `config/lldap/` の JSON を投入する使い捨てのコンテナで、`lldap` が healthy になってから 1 度だけ走ります。`docker compose logs lldap-bootstrap` を確認してください。このスクリプトは実行時に `jq` と `jo` を apk で取得するため、起動時にネットワークが必要です。投入内容を変えたときは `docker compose up -d --force-recreate lldap-bootstrap` で流し直せます。
 
 **認証は通るのに Consumer が付かない。** `consumer_optional: true` にしてあるため、`config/kong/kong.yaml` の `consumers` に無いユーザーでもリクエストは通ります。`env.yaml` の `idp.users[]` に足せば Consumer も一緒に生成されます。
 
 **グループでアクセスを分けたい。** `ldap-auth-advanced` は認証したユーザーの LDAP グループを ACL に載せるので、`config/kong/kong.yaml` のルートに `acl` プラグインを足し、`allow` に `developer-dep` や `researcher-dep` を並べれば経路ごとに通すグループを絞れます。どのグループをどの経路に許すかは構成ごとの判断なので、generator では生成していません。
+
+**認証後に 502 になる／AI Proxy Advanced が見当たらない。** `.env` のプロバイダ用 API キーが空だと、`ai-proxy-advanced` の作成がスキーマ検証で失敗します。decK の適用は一括でロールバックされないため、Service や LDAP プラグインだけが残ることがあります。`mise run setup`・`sync`・`diff` は必要な環境変数が空なら処理を開始せずに停止します。キーを設定して `mise run diff` で差分を確認し、`mise run sync` で再適用してください。ログの接続先が `127.0.0.1:32000` なら、AI Proxy が仮の Service URL を差し替えていません。
+
+**疎通テストの範囲。** `mise run smoke` は無認証の 401 と、LDAP 認証付きチャットの 200 を確認します。上流 LLM の有効な API キーとデプロイが必要で、テスト時に LLM を呼び出します。401 以外でも、502 などのエラーは失敗になります。

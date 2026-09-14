@@ -1,3 +1,4 @@
+from base64 import b64encode
 from dataclasses import dataclass
 
 from generator.schema import (
@@ -178,6 +179,11 @@ class IdpCtx:
     token_endpoint: str | None
     test_username: str | None
     test_password: str | None
+
+    @property
+    def test_credentials_base64(self) -> str:
+        credentials = f"{self.test_username}:{self.test_password}"
+        return b64encode(credentials.encode()).decode("ascii")
 
 
 @dataclass(frozen=True)

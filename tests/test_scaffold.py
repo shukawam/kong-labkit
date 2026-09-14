@@ -101,7 +101,7 @@ def test_deck_tasks_export_the_prefixed_environment_variables():
     ctx = ctx_for(gateway="ai-gateway-v1", ai={"providers": [AZURE_PROVIDER]})
     tasks = tomllib.loads(render_all(ctx)["mise.toml"])["tasks"]
     for task in ("sync", "diff"):
-        assert tasks[task]["run"].startswith('DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" ')
+        assert 'DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" ' in tasks[task]["run"]
 
 
 def test_konnect_readme_bootstraps_with_existing_local_certificates_before_starting():

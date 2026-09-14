@@ -225,6 +225,7 @@ def test_ldap_auth_advanced_binds_as_the_lldap_admin():
     assert config["bind_dn"] == "cn=admin,ou=people,dc=acme,dc=local"
     assert config["ldap_password"] == "local-dev-password"
     assert config["attribute"] == "uid"
+    assert config["header_type"] == "ldap"
 
 
 def test_ldap_auth_advanced_maps_groups_to_consumers():

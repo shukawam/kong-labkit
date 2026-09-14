@@ -30,6 +30,7 @@ description = "証明書の用意から環境の起動までを通しで行う"
 run = '''
 set -euo pipefail
 
+
 if [ ! -f .certs/cluster.crt ]; then
   mise run certs
 fi
@@ -64,11 +65,19 @@ echo "起動しました。mise run smoke で疎通を確認してください�
 
 [tasks.sync]
 description = "宣言的設定を適用する"
-run = 'kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve'
+run = '''
+set -euo pipefail
+
+kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve
+'''
 
 [tasks.diff]
 description = "宣言的設定の差分を見る"
-run = 'kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT"'
+run = '''
+set -euo pipefail
+
+kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT"
+'''
 
 [tasks.logs]
 description = "ログを追う。サービス名を引数で渡せる"

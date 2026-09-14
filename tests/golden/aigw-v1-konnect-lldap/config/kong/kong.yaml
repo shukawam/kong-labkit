@@ -39,6 +39,7 @@ services:
           ldap_password: local-dev-password
           base_dn: ou=people,dc=acme,dc=local
           attribute: uid
+          header_type: ldap
           # lldap は平文 LDAP のみを listen する
           ldaps: false
           start_tls: false
