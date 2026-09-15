@@ -110,8 +110,10 @@ def running_env(tmp_path_factory):
     )
     (out / "compose.override.yaml").write_text(OVERRIDE, encoding="utf-8")
 
-    subprocess.run(["docker", "compose", "up", "-d"], cwd=out, check=True)
     try:
+        # up 自体を try に含める: 他プロジェクトのコンテナと衝突して起動が途中で
+        # 失敗しても、finally の down -v で孤児コンテナを必ず片付けるため
+        subprocess.run(["docker", "compose", "up", "-d"], cwd=out, check=True)
         _wait_for(["curl", "-sS", "-f", "http://localhost:28100/status"], cwd=out)
         subprocess.run(
             ["deck", "gateway", "sync", "config/kong/kong.yaml", "--kong-addr", "http://localhost:28001"],
