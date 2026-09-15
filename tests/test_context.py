@@ -56,7 +56,8 @@ def test_entra_issuer_uses_deck_env_reference():
         'https://login.microsoftonline.com/${{ env "DECK_AZURE_TENANT_ID" }}/v2.0'
     )
     assert idp.client_id == '${{ env "DECK_AZURE_CLIENT_ID" }}'
-    assert idp.client_secret == '${{ env "DECK_AZURE_CLIENT_SECRET" }}'
+    # client_secret は kong.yaml では使わなくなった。参照は client_secret_ref 側に出る
+    assert idp.client_secret_ref == '${{ env "DECK_AZURE_CLIENT_SECRET" }}'
     assert idp.service_name is None
 
 
@@ -529,3 +530,33 @@ def test_secrets_context_describes_the_vault():
         "kong",
     )
     assert secrets.env_sources == ("AZURE_OPENAI_API_KEY",)
+
+
+def test_ldap_password_is_a_literal_by_default():
+    idp = build_context(spec_from(idp={"type": "ldap"})).idp
+    assert idp.ldap.bind_password_ref == idp.ldap.bind_password
+
+
+def test_ldap_password_becomes_a_vault_reference():
+    ctx = build_context(spec_from(idp={"type": "ldap"}, secrets={"backend": "vault"}))
+    assert ctx.idp.ldap.bind_password_ref == "{vault://hcv/kong/ldap/ldap_password}"
+    # lldap コンテナ自身は実値が要るので、こちらは平文のまま残る
+    assert ctx.idp.ldap.bind_password == "local-dev-password"
+    seed = next(s for s in ctx.secrets.seeds if s.path == "ldap")
+    assert (seed.key, seed.literal) == ("ldap_password", "local-dev-password")
+
+
+def test_keycloak_client_secret_becomes_a_vault_reference():
+    ctx = build_context(
+        spec_from(idp={"type": "keycloak", "realm": "acme"}, secrets={"backend": "vault"})
+    )
+    assert ctx.idp.client_secret_ref == "{vault://hcv/kong/oidc/client_secret}"
+    # realm-export.json は Keycloak 側の設定なので実値が要る
+    assert ctx.idp.client_secret == "local-dev-secret"
+
+
+def test_entra_client_secret_becomes_a_vault_reference():
+    ctx = build_context(spec_from(idp={"type": "entra-id"}, secrets={"backend": "vault"}))
+    assert ctx.idp.client_secret_ref == "{vault://hcv/kong/oidc/client_secret}"
+    # client_id は秘密ではないので decK の env 参照のまま
+    assert ctx.idp.client_id == '${{ env "DECK_AZURE_CLIENT_ID" }}'

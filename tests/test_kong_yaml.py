@@ -267,3 +267,18 @@ def test_ldap_protects_the_chat_route_on_aigw_v1():
     plugins = kong_yaml_of(ctx)["services"][0]["plugins"]
     assert any(p["name"] == "ldap-auth-advanced" for p in plugins)
     assert any(p["name"] == "ai-proxy-advanced" for p in plugins)
+
+
+def test_ldap_plugin_writes_a_vault_reference():
+    doc = kong_yaml_of(ctx_for(idp={"type": "ldap"}, secrets={"backend": "vault"}))
+    for service in doc["services"]:
+        for plugin in service.get("plugins", []):
+            if plugin["name"] == "ldap-auth-advanced":
+                assert plugin["config"]["ldap_password"] == "{vault://hcv/kong/ldap/ldap_password}"
+                return
+    raise AssertionError("ldap-auth-advanced が無い")
+
+
+def test_no_plaintext_secret_remains_in_kong_yaml_with_vault():
+    body = render_all(ctx_for(idp={"type": "ldap"}, secrets={"backend": "vault"}))["config/kong/kong.yaml"]
+    assert "local-dev-password" not in body

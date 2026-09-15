@@ -180,6 +180,8 @@ class LdapCtx:
     admin_name: str
     bind_dn: str
     bind_password: str
+    # kong.yaml が書く形。vault 構成では参照文字列になる
+    bind_password_ref: str
     jwt_secret: str
     attribute: str
     users: tuple[LdapUserCtx, ...]
@@ -198,6 +200,7 @@ class IdpCtx:
     client_id: str | None
     # decK は ${VAR} を展開しないため、client secret の参照方法は idp の種類ごとに context が決める
     client_secret: str | None
+    client_secret_ref: str | None
     service_name: str | None
     public_client_id: str | None
     token_endpoint: str | None
@@ -445,7 +448,7 @@ def _build_ldap_users(spec: EnvSpec) -> tuple[LdapUserCtx, ...]:
     )
 
 
-def _build_ldap(spec: EnvSpec, ports: dict[str, int]) -> LdapCtx:
+def _build_ldap(spec: EnvSpec, ports: dict[str, int], refs: _SecretRefs) -> LdapCtx:
     base_dn = f"dc={spec.customer},dc=local"
     users_dn = f"ou=people,{base_dn}"
     users = _build_ldap_users(spec)
@@ -463,6 +466,9 @@ def _build_ldap(spec: EnvSpec, ports: dict[str, int]) -> LdapCtx:
         # lldap は ldap_user_dn に素の名前を受け取り、cn=<name>,ou=people,<base> を組み立てる
         bind_dn=f"cn={LLDAP_ADMIN_NAME},{users_dn}",
         bind_password=LLDAP_ADMIN_PASSWORD,
+        bind_password_ref=refs.secret_from_literal(
+            LLDAP_ADMIN_PASSWORD, path="ldap", key="ldap_password"
+        ),
         jwt_secret=LLDAP_JWT_SECRET,
         attribute="uid",
         users=users,
@@ -483,6 +489,9 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], refs: _SecretRefs) -> IdpCt
             client_id=f"{spec.customer}-client",
             # ローカル固定値なので decK の env 参照にせず実値を埋める。realm-export と出所を 1 つにする
             client_secret=KEYCLOAK_CLIENT_SECRET,
+            client_secret_ref=refs.secret_from_literal(
+                KEYCLOAK_CLIENT_SECRET, path="oidc", key="client_secret"
+            ),
             service_name="keycloak",
             public_client_id=f"{spec.customer}-public",
             token_endpoint=(
@@ -503,7 +512,10 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], refs: _SecretRefs) -> IdpCt
             realm=None,
             issuer=f"https://login.microsoftonline.com/{tenant}/v2.0",
             client_id=refs.env("AZURE_CLIENT_ID"),
-            client_secret=refs.env("AZURE_CLIENT_SECRET"),
+            client_secret=None,
+            client_secret_ref=refs.secret_from_env(
+                "AZURE_CLIENT_SECRET", path="oidc", key="client_secret"
+            ),
             service_name=None,
             public_client_id=None,
             # 無人でトークンを取得する経路が無いため、スモークは応答コードの確認に落とす
@@ -512,7 +524,7 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], refs: _SecretRefs) -> IdpCt
             test_password=None,
         )
     if spec.idp.type is IdpType.LDAP:
-        ldap = _build_ldap(spec, ports)
+        ldap = _build_ldap(spec, ports, refs)
         return IdpCtx(
             type=IdpType.LDAP,
             enabled=True,
@@ -522,6 +534,7 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], refs: _SecretRefs) -> IdpCt
             issuer=None,
             client_id=None,
             client_secret=None,
+            client_secret_ref=None,
             service_name="lldap",
             public_client_id=None,
             token_endpoint=None,
@@ -538,6 +551,7 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], refs: _SecretRefs) -> IdpCt
         issuer=None,
         client_id=None,
         client_secret=None,
+        client_secret_ref=None,
         service_name=None,
         public_client_id=None,
         token_endpoint=None,
