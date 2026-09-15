@@ -20,8 +20,7 @@ _format_version: "3.0"
           ldap_port: 3890
           # 検索してから bind するので、ユーザーの DN を組み立てる必要がない
           bind_dn: {{ idp.ldap.bind_dn }}
-{# vault 参照は { で始まるため、そのままだと YAML の flow mapping と解釈される。平文の既定値まで一律クォートするとゴールデンが崩れるので参照の時だけクォートする #}
-          ldap_password: {{ ("'" ~ idp.ldap.bind_password_ref ~ "'") if idp.ldap.bind_password_ref.startswith('{') else idp.ldap.bind_password_ref }}
+          ldap_password: '{{ idp.ldap.bind_password_ref }}'
           base_dn: {{ idp.ldap.users_dn }}
           attribute: {{ idp.ldap.attribute }}
           header_type: ldap

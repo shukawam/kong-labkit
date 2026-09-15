@@ -40,7 +40,7 @@ services:
           ldap_port: 3890
           # 検索してから bind するので、ユーザーの DN を組み立てる必要がない
           bind_dn: cn=admin,ou=people,dc=acme,dc=local
-          ldap_password: local-dev-password
+          ldap_password: 'local-dev-password'
           base_dn: ou=people,dc=acme,dc=local
           attribute: uid
           header_type: ldap
