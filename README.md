@@ -69,7 +69,8 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 | `idp.users[]` | `name` / `email` / `password` / `groups[]` | `tester` 1 名 | `ldap` のときだけ。グループは `users[].groups` から導出。`email` は `<name>@example.com`、`password` は `<name>-password` が既定 |
 | `cache.type` | `redis` / `redis-stack` / `none` | `none` | |
 | `vectordb.type` | `redis-stack` / `pgvector` / `none` | `none` | `redis-stack` は `cache.type: redis-stack` が必須 |
-| `observability.otel_lgtm` | 真偽値 | `true` | |
+| `observability.backend` | `otel-lgtm` / `newrelic` / `none` | `otel-lgtm` | `newrelic` は素の OTel Collector を同梱し、Grafana とダッシュボードは生成しない |
+| `observability.newrelic.region` | `us` / `eu` | `us` | `backend: newrelic` のときだけ指定できる |
 | `upstream` | `httpbin` / `none` | `api-gateway` なら `httpbin` | |
 
 ## 弾かれる組み合わせ

@@ -152,7 +152,7 @@ def test_tracing_only_when_otel_enabled(compose_of):
 
     off = compose_of(
         only_services(
-            ctx_for(gateway="ai-gateway-v2", observability={"otel_lgtm": False}),
+            ctx_for(gateway="ai-gateway-v2", observability={"backend": "none"}),
             "kong-aigw-v2",
         )
     )

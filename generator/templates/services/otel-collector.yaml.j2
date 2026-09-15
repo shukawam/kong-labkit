@@ -1,0 +1,11 @@
+otel-collector:
+  <<: *default
+  container_name: otel-collector
+  image: otel/opentelemetry-collector-contrib:0.160.0
+  environment:
+    NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY}
+  ports:
+    - {{ ports.otlp_grpc }}:4317
+    - {{ ports.otlp_http }}:4318
+  volumes:
+    - ./config/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro

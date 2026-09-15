@@ -171,9 +171,37 @@ def test_otel_endpoints():
 
 
 def test_otel_disabled():
-    otel = build_context(spec_from(observability={"otel_lgtm": False})).otel
+    otel = build_context(spec_from(observability={"backend": "none"})).otel
     assert otel.enabled is False
     assert otel.endpoint is None
+
+
+def test_newrelic_points_kong_at_the_local_collector():
+    """Kong は送信先しか知らない。New Relic への中継は Collector 側の仕事。"""
+    otel = build_context(spec_from(observability={"backend": "newrelic"})).otel
+    assert otel.enabled is True
+    assert otel.endpoint == "http://otel-collector:4318"
+    assert otel.grpc_endpoint == "http://otel-collector:4317"
+    assert otel.nr_endpoint == "https://otlp.nr-data.net"
+
+
+def test_newrelic_eu_region_switches_the_exporter_endpoint():
+    otel = build_context(
+        spec_from(observability={"backend": "newrelic", "newrelic": {"region": "eu"}})
+    ).otel
+    assert otel.nr_endpoint == "https://otlp.eu01.nr-data.net"
+
+
+def test_newrelic_replaces_the_lgtm_service():
+    services = build_context(spec_from(observability={"backend": "newrelic"})).services
+    assert "otel-collector" in services
+    assert "otel-lgtm" not in services
+
+
+def test_newrelic_license_key_is_requested_in_env():
+    env_vars = build_context(spec_from(observability={"backend": "newrelic"})).env_vars
+    assert env_vars["NEW_RELIC_LICENSE_KEY"] == ""
+    assert "NEW_RELIC_LICENSE_KEY" not in build_context(spec_from()).env_vars
 
 
 def test_cache_image_by_type():

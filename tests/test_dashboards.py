@@ -24,7 +24,7 @@ def test_dashboards_emitted_when_otel_enabled():
 
 
 def test_nothing_grafana_related_when_otel_disabled():
-    files = render_all(ctx_for(observability={"otel_lgtm": False}))
+    files = render_all(ctx_for(observability={"backend": "none"}))
     assert not [p for p in files if p.startswith("config/grafana")]
     assert "config/otel-lgtm/otelcol-config.yaml" not in files
 
@@ -63,7 +63,7 @@ def test_otel_lgtm_mounts_dashboards_and_collector_config(compose_of):
 
 
 def test_no_otel_lgtm_service_when_otel_disabled(compose_of):
-    assert "otel-lgtm" not in compose_of(ctx_for(observability={"otel_lgtm": False}))["services"]
+    assert "otel-lgtm" not in compose_of(ctx_for(observability={"backend": "none"}))["services"]
 
 
 def kong_yaml_of(ctx) -> dict:

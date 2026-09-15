@@ -47,6 +47,17 @@ class UpstreamType(StrEnum):
     NONE = "none"
 
 
+class ObservabilityBackend(StrEnum):
+    OTEL_LGTM = "otel-lgtm"
+    NEWRELIC = "newrelic"
+    NONE = "none"
+
+
+class NewRelicRegion(StrEnum):
+    US = "us"
+    EU = "eu"
+
+
 class ProviderType(StrEnum):
     AZURE = "azure"
     BEDROCK = "bedrock"
@@ -110,8 +121,22 @@ class VectorDbSpec(Strict):
     type: VectorDbType = VectorDbType.NONE
 
 
+class NewRelicSpec(Strict):
+    region: NewRelicRegion = NewRelicRegion.US
+
+
 class ObservabilitySpec(Strict):
-    otel_lgtm: bool = True
+    backend: ObservabilityBackend = ObservabilityBackend.OTEL_LGTM
+    newrelic: NewRelicSpec | None = None
+
+    @model_validator(mode="after")
+    def _check_newrelic_block(self):
+        if self.newrelic and self.backend is not ObservabilityBackend.NEWRELIC:
+            raise ValueError(
+                "observability.newrelic は observability.backend: newrelic のときだけ"
+                f"指定できます（いまは backend: {self.backend.value} で、この設定はどこにも出ません）。"
+            )
+        return self
 
 
 class EnvSpec(Strict):

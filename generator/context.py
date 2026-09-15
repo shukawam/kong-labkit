@@ -9,10 +9,24 @@ from generator.schema import (
     Gateway,
     IdpType,
     LdapUser,
+    NewRelicRegion,
+    NewRelicSpec,
+    ObservabilityBackend,
     ProviderType,
     UpstreamType,
     VectorDbType,
 )
+
+
+OTEL_SERVICE: dict[ObservabilityBackend, str] = {
+    ObservabilityBackend.OTEL_LGTM: "otel-lgtm",
+    ObservabilityBackend.NEWRELIC: "otel-collector",
+}
+
+NEWRELIC_OTLP: dict[NewRelicRegion, str] = {
+    NewRelicRegion.US: "https://otlp.nr-data.net",
+    NewRelicRegion.EU: "https://otlp.eu01.nr-data.net",
+}
 
 
 class PortConflictError(Exception):
@@ -59,8 +73,10 @@ def _required_keys(spec: EnvSpec) -> set[str]:
     keys = {"proxy", "status"}
     if spec.control_plane is ControlPlane.SELF_MANAGED:
         keys |= {"admin", "manager", "kong_pg"}
-    if spec.observability.otel_lgtm:
-        keys |= {"grafana", "otlp_grpc", "otlp_http"}
+    if spec.observability.backend is not ObservabilityBackend.NONE:
+        keys |= {"otlp_grpc", "otlp_http"}
+    if spec.observability.backend is ObservabilityBackend.OTEL_LGTM:
+        keys.add("grafana")
     if spec.idp.type is IdpType.KEYCLOAK:
         keys.add("keycloak")
     if spec.idp.type is IdpType.LDAP:
@@ -189,8 +205,11 @@ class IdpCtx:
 @dataclass(frozen=True)
 class OtelCtx:
     enabled: bool
+    backend: ObservabilityBackend
     endpoint: str | None
     grpc_endpoint: str | None
+    # backend: newrelic のときだけ入る、Collector から先の送信先
+    nr_endpoint: str | None = None
     metrics_push_interval: int = 15
 
 
@@ -453,12 +472,22 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpC
 
 
 def _build_otel(spec: EnvSpec) -> OtelCtx:
-    if not spec.observability.otel_lgtm:
-        return OtelCtx(enabled=False, endpoint=None, grpc_endpoint=None)
+    backend = spec.observability.backend
+    if backend is ObservabilityBackend.NONE:
+        return OtelCtx(
+            enabled=False, backend=backend, endpoint=None, grpc_endpoint=None
+        )
+    host = OTEL_SERVICE[backend]
+    nr_endpoint = None
+    if backend is ObservabilityBackend.NEWRELIC:
+        newrelic = spec.observability.newrelic or NewRelicSpec()
+        nr_endpoint = NEWRELIC_OTLP[newrelic.region]
     return OtelCtx(
         enabled=True,
-        endpoint="http://otel-lgtm:4318",
-        grpc_endpoint="http://otel-lgtm:4317",
+        backend=backend,
+        endpoint=f"http://{host}:4318",
+        grpc_endpoint=f"http://{host}:4317",
+        nr_endpoint=nr_endpoint,
     )
 
 
@@ -547,8 +576,8 @@ def _build_services(spec: EnvSpec) -> list[str]:
         services.append("keycloak")
     if spec.idp.type is IdpType.LDAP:
         services += ["lldap", "lldap-bootstrap"]
-    if spec.observability.otel_lgtm:
-        services.append("otel-lgtm")
+    if spec.observability.backend is not ObservabilityBackend.NONE:
+        services.append(OTEL_SERVICE[spec.observability.backend])
     return services
 
 
@@ -562,6 +591,9 @@ _PROVIDER_ENV = {
 
 def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
     env: dict[str, str] = {}
+
+    if spec.observability.backend is ObservabilityBackend.NEWRELIC:
+        env["NEW_RELIC_LICENSE_KEY"] = ""
 
     if spec.control_plane is ControlPlane.KONNECT:
         env["CONTROL_PLANE_ID"] = ""

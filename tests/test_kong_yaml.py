@@ -64,7 +64,7 @@ def test_opentelemetry_plugin_is_global_when_otel_enabled():
 
 
 def test_no_global_plugins_when_otel_disabled():
-    doc = kong_yaml_of(ctx_for(observability={"otel_lgtm": False}))
+    doc = kong_yaml_of(ctx_for(observability={"backend": "none"}))
     assert doc.get("plugins", []) == []
 
 

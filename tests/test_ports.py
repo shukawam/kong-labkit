@@ -57,9 +57,16 @@ def test_keycloak_and_cache_and_httpbin():
 
 
 def test_otel_disabled_drops_observability_ports():
-    ports = allocate_ports(spec_from(observability={"otel_lgtm": False}, upstream="none"))
+    ports = allocate_ports(spec_from(observability={"backend": "none"}, upstream="none"))
     assert "grafana" not in ports
     assert "otlp_http" not in ports
+
+
+def test_newrelic_keeps_otlp_ports_but_drops_grafana():
+    ports = allocate_ports(spec_from(observability={"backend": "newrelic"}, upstream="none"))
+    assert "grafana" not in ports
+    assert ports["otlp_grpc"] == 4317
+    assert ports["otlp_http"] == 4318
 
 
 def test_no_duplicate_ports_across_full_configuration():

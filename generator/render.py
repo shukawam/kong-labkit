@@ -63,7 +63,11 @@ def render_all(ctx: Ctx) -> dict[str, str]:
             **variables
         ),
     }
-    if ctx.otel.enabled:
+    if ctx.otel.backend.value == "newrelic":
+        files["config/otel-collector/config.yaml"] = env.get_template(
+            "config/otelcol-newrelic.yaml.j2"
+        ).render(**variables)
+    if ctx.otel.backend.value == "otel-lgtm":
         files["config/otel-lgtm/otelcol-config.yaml"] = (
             ASSET_DIR / "otel-lgtm" / "otelcol-config.yaml"
         ).read_text(encoding="utf-8")

@@ -11,7 +11,7 @@
 | IdP | {{ spec.idp.type.value }}{% if idp.realm %}（realm: {{ idp.realm }}）{% endif %}{% if idp.ldap %}（lldap / {{ idp.ldap.base_dn }}）{% endif %} |
 | キャッシュ | {{ spec.cache.type.value }} |
 | ベクトル DB | {{ spec.vectordb.type.value }} |
-| Observability | {{ 'otel-lgtm' if otel.enabled else 'なし' }} |
+| Observability | {% if otel.backend.value == 'newrelic' %}New Relic（{{ otel.nr_endpoint }}）{% elif otel.enabled %}{{ otel.backend.value }}{% else %}なし{% endif %} |
 
 ## 前提
 
@@ -59,7 +59,7 @@ mise run smoke
 | Admin API | http://localhost:{{ ports.admin }} |
 | Kong Manager | http://localhost:{{ ports.manager }} |
 {% endif %}
-{% if otel.enabled %}
+{% if otel.backend.value == 'otel-lgtm' %}
 | Grafana | http://localhost:{{ ports.grafana }} |
 {% endif %}
 {% if idp.type.value == 'keycloak' %}
@@ -78,7 +78,7 @@ mise run smoke
 {% if upstream.enabled %}
 | httpbin（直接） | http://localhost:{{ ports.httpbin }} |
 {% endif %}
-{% if otel.enabled %}
+{% if otel.backend.value == 'otel-lgtm' %}
 
 ## ダッシュボード
 
@@ -97,6 +97,16 @@ Grafana の `Kong` フォルダに、`config/grafana/dashboards/` の定義が p
 
 この構成は Gateway の設定を Konnect 側で持つため、generator は `opentelemetry` プラグインを生成しません。パネルにデータを出すには、Konnect で `opentelemetry` プラグインを追加し、`metrics.endpoint` に `{{ otel.endpoint }}/v1/metrics` を、`enable_request_metrics` から `enable_ai_metrics` までを true に設定してください。AI のパネルにはさらに、AI Gateway 側で統計ログ（`log_statistics` 相当）を有効にする必要があります。
 {% endif %}
+{% endif %}
+{% if otel.backend.value == 'newrelic' %}
+
+## New Relic
+
+`otel-collector`（`otel/opentelemetry-collector-contrib`）が OTLP を受け、`{{ otel.nr_endpoint }}` へ中継します。Kong 側の送信先はこの Collector で、New Relic のライセンスキーは Collector だけが持ちます。
+
+`.env` の `NEW_RELIC_LICENSE_KEY` に Ingest License Key（New Relic > 右上のアカウント > API keys > Ingest - License）を入れてから `mise run up` してください。データは New Relic の APM & Services、Metrics Explorer、Logs に `kong` 由来のエンティティとして現れます。
+
+送信先リージョンを変えるときは `env.yaml` の `observability.newrelic.region`（`us` / `eu`）を変えて再生成してください。中継の設定を直に触りたいときは `config/otel-collector/config.yaml` を編集します。
 {% endif %}
 {% if idp.ldap %}
 
@@ -148,11 +158,15 @@ Grafana の `Kong` フォルダに、`config/grafana/dashboards/` の定義が p
 
 **ベクトル検索が動かない。** `redis:8` ではなく `redis/redis-stack` を使っているか確認してください。素の Redis には検索モジュールが入っていません。
 {% endif %}
-{% if otel.enabled %}
+{% if otel.backend.value == 'otel-lgtm' %}
 
 **Grafana にメトリクスが 1 つも出ない。** `opentelemetry` プラグインは「その値が最後に更新された時刻」を datapoint のタイムスタンプに使います。起動時に一度だけ立つゲージ（`kong.cp.connection.status` など）は時間とともに古くなり、Prometheus に `too old sample` で弾かれます。OTLP は 1 点でも弾かれるとリクエスト全体が 400 になるため、Kong のメトリクスが丸ごと落ちます。`config/otel-lgtm/otelcol-config.yaml` の `transform/kong` プロセッサが送信時刻で上書きしてこれを避けているので、このマウントを外さないでください。`docker compose logs otel-lgtm | grep "Exporting failed"` で確認できます。
 
 **ダッシュボードが Grafana に現れない。** `config/grafana/dashboards.yaml` の `path` は `conf/provisioning` の下を指す必要があります。Grafana の `permitted_provisioning_paths` がそれ以外を拒否します。
+{% endif %}
+{% if otel.backend.value == 'newrelic' %}
+
+**New Relic にメトリクスが 1 つも出ない。** まず `docker compose logs otel-collector | grep -i "permanent error"` を見てください。401 ならライセンスキー（`NEW_RELIC_LICENSE_KEY`）が空か、User Key を入れています。必要なのは Ingest License Key です。403 ならリージョンが合っていません（EU アカウントは `observability.newrelic.region: eu`）。次に、`opentelemetry` プラグインは「その値が最後に更新された時刻」を datapoint のタイムスタンプに使うため、起動時に一度だけ立つゲージ（`kong.cp.connection.status` など）は時間とともに古くなり、New Relic の受け付ける時間窓から外れて捨てられます。`config/otel-collector/config.yaml` の `transform/kong` プロセッサが送信時刻で上書きしてこれを避けているので、このマウントを外さないでください。
 {% endif %}
 {% if spec.gateway.value == 'ai-gateway-v1' %}
 

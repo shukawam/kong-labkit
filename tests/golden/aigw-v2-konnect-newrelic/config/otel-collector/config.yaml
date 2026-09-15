@@ -1,0 +1,47 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+    path: "/ready"
+
+processors:
+  batch:
+  # Kong は「その値が最後に更新された時刻」を datapoint のタイムスタンプに使う。
+  # 起動時に一度だけ立つゲージ（kong.cp.connection.status など）はそのまま古くなり続け、
+  # New Relic の受け付ける時間窓から外れて捨てられるので、送信時刻で上書きする
+  transform/kong:
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(datapoint.time, Now())
+
+exporters:
+  otlp_http/newrelic:
+    endpoint: https://otlp.nr-data.net
+    headers:
+      api-key: ${env:NEW_RELIC_LICENSE_KEY}
+    retry_on_failure:
+      enabled: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]
+    metrics:
+      receivers: [otlp]
+      processors: [transform/kong, batch]
+      exporters: [otlp_http/newrelic]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]

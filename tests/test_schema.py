@@ -5,7 +5,15 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from generator.schema import ControlPlane, EnvSpec, Gateway, UpstreamType, load_spec
+from generator.schema import (
+    ControlPlane,
+    EnvSpec,
+    Gateway,
+    NewRelicRegion,
+    ObservabilityBackend,
+    UpstreamType,
+    load_spec,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,7 +32,7 @@ def test_minimal_spec_defaults():
     spec = spec_from()
     assert spec.control_plane is ControlPlane.KONNECT
     assert spec.region == "us"
-    assert spec.observability.otel_lgtm is True
+    assert spec.observability.backend is ObservabilityBackend.OTEL_LGTM
     # api-gateway は上流が必要なので httpbin が既定で入る
     assert spec.upstream is UpstreamType.HTTPBIN
 
@@ -170,3 +178,16 @@ def test_json_schema_is_up_to_date():
 def test_examples_declare_schema(example):
     first = example.read_text(encoding="utf-8").splitlines()[0]
     assert first == "# yaml-language-server: $schema=../schemas/env.schema.json"
+
+
+def test_newrelic_region_defaults_to_us():
+    spec = spec_from(observability={"backend": "newrelic"})
+    assert spec.observability.newrelic is None
+    spec = spec_from(observability={"backend": "newrelic", "newrelic": {}})
+    assert spec.observability.newrelic.region is NewRelicRegion.US
+
+
+def test_newrelic_block_needs_the_newrelic_backend():
+    with pytest.raises(ValidationError) as e:
+        spec_from(observability={"backend": "otel-lgtm", "newrelic": {"region": "eu"}})
+    assert "observability.newrelic" in str(e.value)

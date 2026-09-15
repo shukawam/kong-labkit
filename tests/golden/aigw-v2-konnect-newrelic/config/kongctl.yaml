@@ -1,0 +1,61 @@
+_defaults:
+  kongctl:
+    namespace: acme
+
+ai_gateways:
+  - ref: acme-ai-gateway
+    name: acme-ai-gateway
+    display_name: acme-ai-gateway
+    deployment_type: hybrid
+
+    model_providers:
+      - ref: azure
+        ai_gateway: !ref acme-ai-gateway#id
+        name: azure
+        type: azure
+        display_name: azure
+        config:
+          instance: acme-foundry
+          auth:
+            type: basic
+            headers:
+              - name: api-key
+                value: !env AZURE_OPENAI_API_KEY
+
+    models:
+      - ref: gpt-5-6
+        ai_gateway: !ref acme-ai-gateway#id
+        name: gpt-5-6
+        display_name: gpt-5-6
+        type: model
+        enabled: true
+        capabilities:
+          - generate
+        formats:
+          - type: openai
+        targets:
+          - name: gpt-5-6
+            provider: azure
+            weight: 100
+            config:
+              type: azure
+              deployment_id: gpt-5.6
+              api_version: 2024-12-01-preview
+        config:
+          model:
+            name_header: true
+          response_streaming: allow
+          route:
+            paths:
+              - /v1/gpt-5-6
+            protocols:
+              - http
+              - https
+            strip_path: true
+
+    data_plane_certificates:
+      - ref: acme-ai-gateway-cert
+        ai_gateway: !ref acme-ai-gateway#id
+        title: Cluster Certificate
+        description: Cluster certificate for acme-ai-gateway
+        cert: !file ../.certs/cluster.crt
