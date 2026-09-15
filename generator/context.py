@@ -191,6 +191,7 @@ class OtelCtx:
     enabled: bool
     endpoint: str | None
     grpc_endpoint: str | None
+    metrics_push_interval: int = 15
 
 
 @dataclass(frozen=True)

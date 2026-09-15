@@ -122,3 +122,10 @@ services:
       - 3000:3000
       - 4317:4317
       - 4318:4318
+    # provisioning ディレクトリごと差し替えると同梱の RED metrics ダッシュボードが消えるので、
+    # プロバイダ定義とダッシュボード置き場だけを足す。置き場が conf/provisioning の外にあると
+    # Grafana の permitted_provisioning_paths に弾かれる
+    volumes:
+      - ./config/otel-lgtm/otelcol-config.yaml:/otel-lgtm/otelcol-config.yaml:ro
+      - ./config/grafana/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/kong.yaml:ro
+      - ./config/grafana/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards/kong:ro

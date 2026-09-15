@@ -29,8 +29,10 @@ _format_version: "3.0"
           start_tls: false
           verify_ldap_host: false
           cache_ttl: 60
-          # Consumer が無いユーザーも通す。認証と Consumer 割り当てを別々に試せる
-          consumer_optional: true
+          # true にすると Consumer の解決自体がスキップされ、リクエストが Consumer に紐付かない。
+          # 紐付かないと kong.auth.consumer.name 属性が出ず、Consumer 単位のダッシュボードが空になる。
+          # 代償として、LDAP には居るが consumers に無いユーザーは 403 になる
+          consumer_optional: false
           consumer_by:
             - username
           group_base_dn: {{ idp.ldap.groups_dn }}
@@ -67,6 +69,10 @@ services: []
 {% set provider_auth = deck.provider_auth[loop.index0] %}
 {% for model in provider.models %}
             - route_type: llm/v1/chat
+              # 既定は false。false のままだと gen_ai.* / kong.gen_ai.* メトリクスが一切出ない
+              logging:
+                log_statistics: true
+                log_payloads: false
               auth:
 {% for key, value in provider_auth.items() %}
                 {{ key }}: {{ value }}
@@ -83,6 +89,13 @@ services: []
 {% endif %}
 {% if model.api_version %}
                   azure_api_version: "{{ model.api_version }}"
+{% endif %}
+{% if model.input_cost is not none %}
+                  # 100 万トークンあたりの USD。入れないと kong.gen_ai.llm.cost が常に 0 になる
+                  input_cost: {{ model.input_cost }}
+{% endif %}
+{% if model.output_cost is not none %}
+                  output_cost: {{ model.output_cost }}
 {% endif %}
 {% endfor %}
 {% endfor %}
@@ -150,6 +163,17 @@ plugins:
     config:
       traces_endpoint: {{ otel.endpoint }}/v1/traces
       logs_endpoint: {{ otel.endpoint }}/v1/logs
+      # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
+      # Prometheus プラグインは使わない
+      metrics:
+        endpoint: {{ otel.endpoint }}/v1/metrics
+        push_interval: {{ otel.metrics_push_interval }}
+        enable_request_metrics: true
+        enable_latency_metrics: true
+        enable_bandwidth_metrics: true
+        enable_upstream_health_metrics: true
+        enable_consumer_attribute: true
+        enable_ai_metrics: true
       resource_attributes:
         service.name: {{ kong.cp_name }}
 {% else %}

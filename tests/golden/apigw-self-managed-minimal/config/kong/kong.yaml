@@ -18,5 +18,16 @@ plugins:
     config:
       traces_endpoint: http://otel-lgtm:4318/v1/traces
       logs_endpoint: http://otel-lgtm:4318/v1/logs
+      # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
+      # Prometheus プラグインは使わない
+      metrics:
+        endpoint: http://otel-lgtm:4318/v1/metrics
+        push_interval: 15
+        enable_request_metrics: true
+        enable_latency_metrics: true
+        enable_bandwidth_metrics: true
+        enable_upstream_health_metrics: true
+        enable_consumer_attribute: true
+        enable_ai_metrics: true
       resource_attributes:
         service.name: acme-gateway

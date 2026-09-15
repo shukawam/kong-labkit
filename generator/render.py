@@ -5,6 +5,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from generator.context import Ctx
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
+ASSET_DIR = Path(__file__).parent / "assets"
 
 
 def build_env() -> Environment:
@@ -38,6 +39,15 @@ def template_vars(ctx: Ctx) -> dict:
     }
 
 
+def _assets(subdir: str, dest: str) -> dict[str, str]:
+    """Jinja を通さずにそのままコピーする。Grafana の legendFormat が {{label}} を使うため。"""
+    return {
+        f"{dest}/{path.name}": path.read_text(encoding="utf-8")
+        for path in sorted((ASSET_DIR / subdir).iterdir())
+        if path.is_file()
+    }
+
+
 def render_all(ctx: Ctx) -> dict[str, str]:
     env = build_env()
     variables = template_vars(ctx)
@@ -53,6 +63,16 @@ def render_all(ctx: Ctx) -> dict[str, str]:
             **variables
         ),
     }
+    if ctx.otel.enabled:
+        files["config/otel-lgtm/otelcol-config.yaml"] = (
+            ASSET_DIR / "otel-lgtm" / "otelcol-config.yaml"
+        ).read_text(encoding="utf-8")
+        grafana = _assets("grafana", "config/grafana")
+        files["config/grafana/dashboards.yaml"] = grafana.pop("config/grafana/dashboards.yaml")
+        files.update(
+            {k.replace("config/grafana/", "config/grafana/dashboards/"): v
+             for k, v in grafana.items()}
+        )
     if ctx.vector.enabled and ctx.vector.type.value == "pgvector":
         files["config/pgvector/init.sql"] = "CREATE EXTENSION IF NOT EXISTS vector;\n"
     if ctx.idp.type.value == "keycloak":

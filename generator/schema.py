@@ -69,6 +69,9 @@ class Model(Strict):
     name: str
     deployment_id: str | None = None
     api_version: str | None = None
+    # 100 万トークンあたりの USD。ai-proxy-advanced の input_cost / output_cost にそのまま渡す
+    input_cost: float | None = None
+    output_cost: float | None = None
 
 
 class Provider(Strict):

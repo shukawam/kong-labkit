@@ -234,7 +234,9 @@ def test_ldap_auth_advanced_maps_groups_to_consumers():
         p for p in doc["services"][0]["plugins"] if p["name"] == "ldap-auth-advanced"
     )["config"]
     assert config["consumer_by"] == ["username"]
-    assert config["consumer_optional"] is True
+    # true だと ldap-auth-advanced が Consumer の解決自体を省き、
+    # kong.auth.consumer.name 属性が出なくなる
+    assert config["consumer_optional"] is False
     assert config["group_base_dn"] == "ou=groups,dc=acme,dc=local"
     assert config["group_member_attribute"] == "member"
 

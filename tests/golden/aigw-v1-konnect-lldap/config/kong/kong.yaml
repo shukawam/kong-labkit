@@ -20,6 +20,10 @@ services:
         config:
           targets:
             - route_type: llm/v1/chat
+              # 既定は false。false のままだと gen_ai.* / kong.gen_ai.* メトリクスが一切出ない
+              logging:
+                log_statistics: true
+                log_payloads: false
               auth:
                 header_name: api-key
                 header_value: '${{ env "DECK_AZURE_OPENAI_API_KEY" }}'
@@ -45,8 +49,10 @@ services:
           start_tls: false
           verify_ldap_host: false
           cache_ttl: 60
-          # Consumer が無いユーザーも通す。認証と Consumer 割り当てを別々に試せる
-          consumer_optional: true
+          # true にすると Consumer の解決自体がスキップされ、リクエストが Consumer に紐付かない。
+          # 紐付かないと kong.auth.consumer.name 属性が出ず、Consumer 単位のダッシュボードが空になる。
+          # 代償として、LDAP には居るが consumers に無いユーザーは 403 になる
+          consumer_optional: false
           consumer_by:
             - username
           group_base_dn: ou=groups,dc=acme,dc=local
@@ -63,5 +69,16 @@ plugins:
     config:
       traces_endpoint: http://otel-lgtm:4318/v1/traces
       logs_endpoint: http://otel-lgtm:4318/v1/logs
+      # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
+      # Prometheus プラグインは使わない
+      metrics:
+        endpoint: http://otel-lgtm:4318/v1/metrics
+        push_interval: 15
+        enable_request_metrics: true
+        enable_latency_metrics: true
+        enable_bandwidth_metrics: true
+        enable_upstream_health_metrics: true
+        enable_consumer_attribute: true
+        enable_ai_metrics: true
       resource_attributes:
         service.name: acme-ai-gateway
