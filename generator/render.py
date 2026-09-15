@@ -32,6 +32,7 @@ def template_vars(ctx: Ctx) -> dict:
         "semantic": ctx.semantic,
         "certs": ctx.certs,
         "deck": ctx.deck,
+        "secrets": ctx.secrets,
         "ports": ctx.ports,
         "services": ctx.services,
         "env_vars": ctx.env_vars,
