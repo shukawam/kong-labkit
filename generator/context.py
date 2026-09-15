@@ -52,6 +52,7 @@ PREFERRED_PORTS: dict[str, int] = {
     "keycloak": 8080,
     "ldap": 3890,
     "lldap_web": 17170,
+    "vault": 8200,
     "httpbin": 8081,
     "cache": 6379,
     "kong_pg": 5432,
@@ -70,6 +71,7 @@ _ALLOCATION_ORDER = [
     "keycloak",
     "ldap",
     "lldap_web",
+    "vault",
     "httpbin",
     "cache",
     "kong_pg",
@@ -95,6 +97,8 @@ def _required_keys(spec: EnvSpec) -> set[str]:
         keys.add("cache")
     if spec.vectordb.type is VectorDbType.PGVECTOR:
         keys.add("vector_pg")
+    if spec.secrets.backend is SecretsBackend.VAULT:
+        keys.add("vault")
     return keys
 
 
@@ -665,6 +669,8 @@ def _build_services(spec: EnvSpec) -> list[str]:
         services.append("keycloak")
     if spec.idp.type is IdpType.LDAP:
         services += ["lldap", "lldap-bootstrap"]
+    if spec.secrets.backend is SecretsBackend.VAULT:
+        services += ["vault", "vault-bootstrap"]
     if spec.observability.backend is not ObservabilityBackend.NONE:
         services.append(OTEL_SERVICE[spec.observability.backend])
     return services
@@ -683,6 +689,9 @@ def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
 
     if spec.observability.backend is ObservabilityBackend.NEWRELIC:
         env["NEW_RELIC_LICENSE_KEY"] = ""
+
+    if spec.secrets.backend is SecretsBackend.VAULT:
+        env["VAULT_TOKEN"] = VAULT_ROOT_TOKEN
 
     if spec.control_plane is ControlPlane.KONNECT:
         env["CONTROL_PLANE_ID"] = ""

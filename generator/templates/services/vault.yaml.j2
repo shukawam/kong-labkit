@@ -1,0 +1,18 @@
+vault:
+  <<: *default
+  container_name: vault
+  image: hashicorp/vault:2.1.0
+  # dev モードは自動で unseal され KV v2 が secret/ に載る。ラボ用途なので永続化しない
+  cap_add:
+    - IPC_LOCK
+  environment:
+    VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-{{ secrets.token }}}
+    VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    VAULT_ADDR: http://127.0.0.1:8200
+  ports:
+    - {{ ports.vault }}:8200
+  healthcheck:
+    test: ["CMD", "vault", "status"]
+    interval: 5s
+    timeout: 3s
+    retries: 10

@@ -63,6 +63,10 @@ kong-dp:
   depends_on:
     kong-bootstrap:
       condition: service_completed_successfully
+{% if secrets.enabled %}
+    vault-bootstrap:
+      condition: service_completed_successfully
+{% endif %}
   ports:
     - {{ ports.proxy }}:8000
     - {{ ports.status }}:8100
@@ -86,6 +90,15 @@ kong-dp:
 {% if otel.enabled %}
     KONG_TRACING_INSTRUMENTATIONS: all
     KONG_TRACING_SAMPLING_RATE: "1.0"
+{% endif %}
+{% if secrets.enabled %}
+    KONG_VAULT_HCV_PROTOCOL: http
+    KONG_VAULT_HCV_HOST: {{ secrets.host }}
+    KONG_VAULT_HCV_PORT: "8200"
+    KONG_VAULT_HCV_MOUNT: {{ secrets.mount }}
+    # 既定は v1。dev モードの Vault は KV v2 なので、外すと全参照が解決できなくなる
+    KONG_VAULT_HCV_KV: v2
+    KONG_VAULT_HCV_TOKEN: ${VAULT_TOKEN:-{{ secrets.token }}}
 {% endif %}
   volumes:
     - ./config/kong/certs:/etc/kong/certs
