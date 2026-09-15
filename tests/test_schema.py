@@ -11,6 +11,7 @@ from generator.schema import (
     Gateway,
     NewRelicRegion,
     ObservabilityBackend,
+    SecretsBackend,
     UpstreamType,
     load_spec,
 )
@@ -191,3 +192,21 @@ def test_newrelic_block_needs_the_newrelic_backend():
     with pytest.raises(ValidationError) as e:
         spec_from(observability={"backend": "otel-lgtm", "newrelic": {"region": "eu"}})
     assert "observability.newrelic" in str(e.value)
+
+
+def test_secrets_backend_defaults_to_env():
+    assert spec_from().secrets.backend is SecretsBackend.ENV
+
+
+def test_vault_backend_is_rejected_for_aigw_v2():
+    with pytest.raises(ValidationError) as e:
+        spec_from(gateway="ai-gateway-v2", secrets={"backend": "vault"})
+    assert "secrets.backend: vault" in str(e.value)
+
+
+def test_vault_backend_is_accepted_for_deck_gateways():
+    assert spec_from(secrets={"backend": "vault"}).secrets.backend is SecretsBackend.VAULT
+    assert (
+        spec_from(gateway="ai-gateway-v1", secrets={"backend": "vault"}).secrets.backend
+        is SecretsBackend.VAULT
+    )

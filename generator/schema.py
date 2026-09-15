@@ -58,6 +58,11 @@ class NewRelicRegion(StrEnum):
     EU = "eu"
 
 
+class SecretsBackend(StrEnum):
+    ENV = "env"
+    VAULT = "vault"
+
+
 class ProviderType(StrEnum):
     AZURE = "azure"
     BEDROCK = "bedrock"
@@ -125,6 +130,10 @@ class NewRelicSpec(Strict):
     region: NewRelicRegion = NewRelicRegion.US
 
 
+class SecretsSpec(Strict):
+    backend: SecretsBackend = SecretsBackend.ENV
+
+
 class ObservabilitySpec(Strict):
     backend: ObservabilityBackend = ObservabilityBackend.OTEL_LGTM
     newrelic: NewRelicSpec | None = None
@@ -152,6 +161,7 @@ class EnvSpec(Strict):
     cache: CacheSpec = Field(default_factory=CacheSpec)
     vectordb: VectorDbSpec = Field(default_factory=VectorDbSpec)
     observability: ObservabilitySpec = Field(default_factory=ObservabilitySpec)
+    secrets: SecretsSpec = Field(default_factory=SecretsSpec)
     upstream: UpstreamType | None = None
 
     @property
@@ -259,6 +269,20 @@ class EnvSpec(Strict):
                 "idp.type: ldap は ai-gateway-v2 では使えません"
                 "（v2 の設定は config/kongctl.yaml の AI Gateway エンティティだけで、"
                 "プラグインを書く経路が generator にありません）。"
+                "gateway: ai-gateway-v1 か api-gateway にしてください。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_vault_needs_the_deck_path(self):
+        if (
+            self.secrets.backend is SecretsBackend.VAULT
+            and self.gateway is Gateway.AI_GATEWAY_V2
+        ):
+            raise ValueError(
+                "secrets.backend: vault は ai-gateway-v2 では使えません"
+                "（v2 の設定は config/kongctl.yaml の AI Gateway エンティティだけで、"
+                "そこが vault 参照を受け付けるか検証できていません）。"
                 "gateway: ai-gateway-v1 か api-gateway にしてください。"
             )
         return self
