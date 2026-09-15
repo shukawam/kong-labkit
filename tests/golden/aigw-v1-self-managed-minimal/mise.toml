@@ -1,6 +1,10 @@
 [tasks.up]
 description = "環境を起動する"
-run = "docker compose up -d"
+run = '''
+set -euo pipefail
+
+docker compose up -d
+'''
 
 [tasks.down]
 description = "環境を停止する"
@@ -29,6 +33,7 @@ description = "証明書の用意から環境の起動までを通しで行う"
 run = '''
 set -euo pipefail
 : "${AZURE_OPENAI_API_KEY:?Set AZURE_OPENAI_API_KEY in .env}"
+
 
 
 if [ ! -f config/kong/certs/tls.crt ]; then

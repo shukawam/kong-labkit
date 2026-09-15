@@ -30,11 +30,12 @@ IDPS = [
 ]
 CACHES = ["none", "redis", "redis-stack"]
 VECTORDBS = ["none", "redis-stack", "pgvector"]
+SECRETS = ["env", "vault"]
 
 
 def _candidates():
-    for gateway, cp, idp, cache, vectordb in itertools.product(
-        GATEWAYS, CONTROL_PLANES, IDPS, CACHES, VECTORDBS
+    for gateway, cp, idp, cache, vectordb, secrets in itertools.product(
+        GATEWAYS, CONTROL_PLANES, IDPS, CACHES, VECTORDBS, SECRETS
     ):
         data = {
             "customer": "acme",
@@ -43,6 +44,7 @@ def _candidates():
             "idp": idp,
             "cache": {"type": cache},
             "vectordb": {"type": vectordb},
+            "secrets": {"backend": secrets},
         }
         if gateway.startswith("ai-gateway"):
             data["ai"] = {
@@ -73,6 +75,7 @@ def _spec_id(spec: EnvSpec) -> str:
             spec.idp.type.value,
             spec.cache.type.value,
             spec.vectordb.type.value,
+            spec.secrets.backend.value,
         ]
     )
 

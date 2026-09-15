@@ -12,6 +12,7 @@
 | キャッシュ | {{ spec.cache.type.value }} |
 | ベクトル DB | {{ spec.vectordb.type.value }} |
 | Observability | {% if otel.backend.value == 'newrelic' %}New Relic（{{ otel.nr_endpoint }}）{% elif otel.enabled %}{{ otel.backend.value }}{% else %}なし{% endif %} |
+| 秘匿情報 | {{ 'HashiCorp Vault' if secrets.enabled else '環境変数' }} |
 
 ## 前提
 
@@ -78,6 +79,9 @@ mise run smoke
 {% if upstream.enabled %}
 | httpbin（直接） | http://localhost:{{ ports.httpbin }} |
 {% endif %}
+{% if secrets.enabled %}
+| Vault | http://localhost:{{ ports.vault }} |
+{% endif %}
 {% if otel.backend.value == 'otel-lgtm' %}
 
 ## ダッシュボード
@@ -107,6 +111,26 @@ Grafana の `Kong` フォルダに、`config/grafana/dashboards/` の定義が p
 `.env` の `NEW_RELIC_LICENSE_KEY` に Ingest License Key（New Relic > 右上のアカウント > API keys > Ingest - License）を入れてから `mise run up` してください。データは New Relic の APM & Services、Metrics Explorer、Logs に `kong` 由来のエンティティとして現れます。
 
 送信先リージョンを変えるときは `env.yaml` の `observability.newrelic.region`（`us` / `eu`）を変えて再生成してください。中継の設定を直に触りたいときは `config/otel-collector/config.yaml` を編集します。
+{% endif %}
+{% if secrets.enabled %}
+
+## Vault
+
+秘匿情報は `config/kong/kong.yaml` に実値として載らず、`{vault://hcv/kong/.../...}` という参照として書かれます。解決するのはデータプレーンで、`KONG_VAULT_HCV_*` で指定した Vault に実行時に問い合わせます。Konnect 側にも実値は保存されません。
+
+`vault-bootstrap` が `vault` の起動後に一度だけ走り、次の値を KV に投入します。
+
+| パス | キー | 出どころ |
+|---|---|---|
+{% for path, seeds in secrets.seeds_by_path.items() %}
+{% for seed in seeds %}
+| `{{ secrets.mount }}/{{ secrets.prefix }}/{{ path }}` | `{{ seed.key }}` | {{ '`.env` の `' ~ seed.env_var ~ '`' if seed.env_var else 'ラボ固定値' }} |
+{% endfor %}
+{% endfor %}
+
+OpenAI の `header_value` だけは `Bearer ` を前置した完成形を格納します。Kong の vault 参照は値の一部に埋め込んでも解決されず、フィールドの値全体が参照である必要があるためです。
+
+Vault の UI は http://localhost:{{ ports.vault }} で、トークンは `.env` の `VAULT_TOKEN` です。
 {% endif %}
 {% if idp.ldap %}
 
@@ -157,6 +181,12 @@ Grafana の `Kong` フォルダに、`config/grafana/dashboards/` の定義が p
 {% if vector.enabled and vector.type.value == 'redis-stack' %}
 
 **ベクトル検索が動かない。** `redis:8` ではなく `redis/redis-stack` を使っているか確認してください。素の Redis には検索モジュールが入っていません。
+{% endif %}
+{% if secrets.enabled %}
+
+**認証だけが失敗する／上流が 401 を返す。** `docker compose logs | grep "unable to resolve reference"` を見てください。Vault の参照が解決できていないと、Kong は参照文字列そのものを値として使うため、資格情報が誤っているのと同じ挙動になります。`KONG_VAULT_HCV_KV` を `v2` から変えると全参照が壊れます（Kong 側の既定は `v1` ですが、dev モードの Vault は KV v2 です）。
+
+**Vault を再起動したら認証が通らなくなった。** 同梱の Vault は dev モードでメモリ保持のため、再起動で KV の中身が消えます。`docker compose up -d --force-recreate vault-bootstrap` で投入し直してください。
 {% endif %}
 {% if otel.backend.value == 'otel-lgtm' %}
 

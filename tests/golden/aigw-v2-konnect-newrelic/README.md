@@ -12,6 +12,7 @@
 | キャッシュ | none |
 | ベクトル DB | none |
 | Observability | New Relic（https://otlp.nr-data.net） |
+| 秘匿情報 | 環境変数 |
 
 ## 前提
 

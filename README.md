@@ -71,6 +71,7 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 | `vectordb.type` | `redis-stack` / `pgvector` / `none` | `none` | `redis-stack` は `cache.type: redis-stack` が必須 |
 | `observability.backend` | `otel-lgtm` / `newrelic` / `none` | `otel-lgtm` | `newrelic` は素の OTel Collector を同梱し、Grafana とダッシュボードは生成しない |
 | `observability.newrelic.region` | `us` / `eu` | `us` | `backend: newrelic` のときだけ指定できる |
+| `secrets.backend` | `env` / `vault` | `env` | `vault` は Vault を同梱し、kong.yaml の秘密を `{vault://hcv/...}` 参照にする。`ai-gateway-v2` とは併用不可 |
 | `upstream` | `httpbin` / `none` | `api-gateway` なら `httpbin` | |
 
 ## 弾かれる組み合わせ

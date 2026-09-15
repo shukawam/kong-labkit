@@ -63,3 +63,28 @@ def test_data_plane_waits_for_the_bootstrap():
 def test_no_vault_env_on_the_data_plane_by_default():
     env = compose_doc(ctx_for())["services"]["gateway"]["environment"]
     assert not [k for k in env if k.startswith("KONG_VAULT_")]
+
+
+def test_up_task_checks_the_env_vars_the_bootstrap_needs():
+    ctx = ctx_for(
+        gateway="ai-gateway-v1",
+        ai={"providers": [{"type": "openai", "models": [{"name": "gpt-5-6"}]}]},
+        secrets={"backend": "vault"},
+    )
+    mise = render_all(ctx)["mise.toml"]
+    assert '${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}' in mise
+
+
+def test_up_task_has_no_check_without_vault():
+    mise = render_all(ctx_for())["mise.toml"]
+    assert ":?Set " not in mise.split("[tasks.up]")[1].split("[tasks.")[0]
+
+
+def test_readme_documents_the_vault_flow():
+    readme = render_all(ctx_for(idp={"type": "ldap"}, secrets={"backend": "vault"}))["README.md"]
+    assert "## Vault" in readme
+    assert "unable to resolve reference" in readme
+
+
+def test_readme_has_no_vault_section_by_default():
+    assert "## Vault" not in render_all(ctx_for())["README.md"]

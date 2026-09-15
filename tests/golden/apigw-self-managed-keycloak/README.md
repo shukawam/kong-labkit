@@ -12,6 +12,7 @@
 | キャッシュ | none |
 | ベクトル DB | none |
 | Observability | otel-lgtm |
+| 秘匿情報 | 環境変数 |
 
 ## 前提
 
