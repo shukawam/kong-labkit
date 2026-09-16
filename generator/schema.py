@@ -289,11 +289,15 @@ class EnvSpec(Strict):
 
     @model_validator(mode="after")
     def _check_vault_needs_a_secret(self):
-        has_secret = bool(self.ai.providers) or self.idp.type is not IdpType.NONE
+        # managed-identity は資格情報を持たないので、provider が居ても Vault には何も入らない
+        has_secret = self.idp.type is not IdpType.NONE or any(
+            not (p.type is ProviderType.AZURE and p.auth is AuthType.MANAGED_IDENTITY)
+            for p in self.ai.providers
+        )
         if self.secrets.backend is SecretsBackend.VAULT and not has_secret:
             raise ValueError(
                 "secrets.backend: vault を指定していますが、Vault に入れる秘密がありません"
-                "（ai.providers が空で idp.type: none のままだと、"
+                "（秘密を持つプロバイダが 1 つも無く idp.type: none のままだと、"
                 "kong.yaml に秘密の値が 1 つも生まれず、Vault も vault-bootstrap も空の入れ物になります）。"
                 "ai.providers にプロバイダを足すか、idp.type を none 以外にするか、"
                 "secrets.backend を env に戻してください。"

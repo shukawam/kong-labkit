@@ -221,3 +221,32 @@ def test_vault_backend_is_rejected_without_a_secret_to_hold():
     with pytest.raises(ValidationError) as e:
         spec_from(secrets={"backend": "vault"})
     assert "Vault に入れる秘密がありません" in str(e.value)
+
+
+MANAGED_IDENTITY_PROVIDER = {
+    "type": "azure",
+    "instance": "acme-foundry",
+    "auth": "managed-identity",
+    "models": [{"name": "gpt-5-6", "deployment_id": "gpt-5.6", "api_version": "2024-12-01-preview"}],
+}
+
+
+def test_vault_backend_is_rejected_when_no_provider_carries_a_secret():
+    """managed-identity は資格情報を持たないので、provider があっても Vault は空になる。"""
+    with pytest.raises(ValidationError) as e:
+        spec_from(
+            gateway="ai-gateway-v1",
+            ai={"providers": [MANAGED_IDENTITY_PROVIDER]},
+            secrets={"backend": "vault"},
+        )
+    assert "Vault に入れる秘密がありません" in str(e.value)
+
+
+def test_vault_backend_accepts_managed_identity_when_the_idp_has_a_secret():
+    spec = spec_from(
+        gateway="ai-gateway-v1",
+        ai={"providers": [MANAGED_IDENTITY_PROVIDER]},
+        idp={"type": "ldap"},
+        secrets={"backend": "vault"},
+    )
+    assert spec.secrets.backend is SecretsBackend.VAULT

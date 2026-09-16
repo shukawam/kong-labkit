@@ -507,12 +507,18 @@ def test_openai_bearer_prefix_stays_inline_for_the_env_backend():
 def test_identifiers_stay_on_the_env_backend_even_with_vault():
     """client_id / tenant_id は秘密ではないので Vault に入れない。"""
     provider = {**AZURE_PROVIDER, "auth": "managed-identity"}
+    # managed-identity だけでは秘密が無く vault 構成が成立しないので、IdP 側で 1 つ持たせる
     ctx = build_context(
-        spec_from(gateway="ai-gateway-v1", ai={"providers": [provider]}, secrets={"backend": "vault"})
+        spec_from(
+            gateway="ai-gateway-v1",
+            ai={"providers": [provider]},
+            idp={"type": "ldap"},
+            secrets={"backend": "vault"},
+        )
     )
     auth = ctx.deck.provider_auth[0]
     assert auth["azure_client_id"] == "'${{ env \"DECK_AZURE_CLIENT_ID\" }}'"
-    assert ctx.secrets.seeds == ()
+    assert [s.path for s in ctx.secrets.seeds] == ["ldap"]
 
 
 def test_secrets_context_is_disabled_by_default():
