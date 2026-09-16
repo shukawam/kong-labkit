@@ -143,7 +143,9 @@ def test_bootstrap_completed_successfully(running_env):
 
 def test_ldap_auth_succeeds_through_the_vault_reference(running_env):
     """Kong は Vault から取った bind パスワードでしか LDAP に bind できない。"""
-    deadline = time.time() + 120
+    # deck sync 成功後も CP→DP のルート配布には時間がかかる（404 が続く）ため、
+    # _wait_for と同じ 240 秒まで許容する。120 秒では配布待ちの途中で偽陰性になる。
+    deadline = time.time() + 240
     code = None
     while time.time() < deadline:
         code = _status(running_env, "tester:tester-password")
@@ -154,5 +156,14 @@ def test_ldap_auth_succeeds_through_the_vault_reference(running_env):
 
 
 def test_wrong_credentials_are_rejected(running_env):
-    # 200 が「参照が解決できず素通ししている」偽陽性でないことを確かめる
-    assert _status(running_env, "tester:wrong-password") == "401"
+    # 200 が「参照が解決できず素通ししている」偽陽性でないことを確かめる。
+    # ルートが未配布だと 404 が返るため、まず配布完了（404 以外の応答）を待ってから
+    # 401 を確認する。404 のまま単発で判定すると誤った理由で落ちる。
+    deadline = time.time() + 240
+    code = None
+    while time.time() < deadline:
+        code = _status(running_env, "tester:wrong-password")
+        if code != "404":
+            break
+        time.sleep(3)
+    assert code == "401", f"誤った資格情報で 401 になりませんでした（最後の応答コード: {code}）"
