@@ -287,6 +287,19 @@ class EnvSpec(Strict):
             )
         return self
 
+    @model_validator(mode="after")
+    def _check_vault_needs_a_secret(self):
+        has_secret = bool(self.ai.providers) or self.idp.type is not IdpType.NONE
+        if self.secrets.backend is SecretsBackend.VAULT and not has_secret:
+            raise ValueError(
+                "secrets.backend: vault を指定していますが、Vault に入れる秘密がありません"
+                "（ai.providers が空で idp.type: none のままだと、"
+                "kong.yaml に秘密の値が 1 つも生まれず、Vault も vault-bootstrap も空の入れ物になります）。"
+                "ai.providers にプロバイダを足すか、idp.type を none 以外にするか、"
+                "secrets.backend を env に戻してください。"
+            )
+        return self
+
     def warnings(self) -> list[str]:
         out: list[str] = []
         if self.idp.type is IdpType.ENTRA_ID:

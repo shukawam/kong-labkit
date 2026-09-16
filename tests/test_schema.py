@@ -205,8 +205,19 @@ def test_vault_backend_is_rejected_for_aigw_v2():
 
 
 def test_vault_backend_is_accepted_for_deck_gateways():
-    assert spec_from(secrets={"backend": "vault"}).secrets.backend is SecretsBackend.VAULT
     assert (
-        spec_from(gateway="ai-gateway-v1", secrets={"backend": "vault"}).secrets.backend
+        spec_from(idp={"type": "ldap"}, secrets={"backend": "vault"}).secrets.backend
         is SecretsBackend.VAULT
     )
+    assert (
+        spec_from(
+            gateway="ai-gateway-v1", idp={"type": "ldap"}, secrets={"backend": "vault"}
+        ).secrets.backend
+        is SecretsBackend.VAULT
+    )
+
+
+def test_vault_backend_is_rejected_without_a_secret_to_hold():
+    with pytest.raises(ValidationError) as e:
+        spec_from(secrets={"backend": "vault"})
+    assert "Vault に入れる秘密がありません" in str(e.value)

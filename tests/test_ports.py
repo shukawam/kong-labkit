@@ -101,6 +101,8 @@ def test_ldap_adds_both_lldap_ports():
 
 
 def test_vault_backend_allocates_the_vault_port():
-    ports = allocate_ports(spec_from(secrets={"backend": "vault"}, upstream="none"))
+    ports = allocate_ports(
+        spec_from(idp={"type": "ldap"}, secrets={"backend": "vault"}, upstream="none")
+    )
     assert ports["vault"] == 8200
     assert "vault" not in allocate_ports(spec_from(upstream="none"))
