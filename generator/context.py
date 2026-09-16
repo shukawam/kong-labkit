@@ -370,7 +370,6 @@ class SecretSeed:
 
 @dataclass(frozen=True)
 class SecretsCtx:
-    backend: SecretsBackend
     enabled: bool
     host: str
     mount: str
@@ -380,11 +379,15 @@ class SecretsCtx:
 
     @property
     def seeds_by_path(self) -> dict[str, tuple[SecretSeed, ...]]:
-        """vault kv put は 1 パスに複数キーをまとめて書けるので、パス単位に畳む。"""
-        grouped: dict[str, list[SecretSeed]] = {}
+        """vault kv put は 1 パスに複数キーをまとめて書けるので、パス単位に畳む。
+
+        同種のプロバイダを複数並べると同じ (path, key) が seeds に重複して積まれるため、
+        1 パスの中では key で一意化する（先勝ち）。
+        """
+        grouped: dict[str, dict[str, SecretSeed]] = {}
         for seed in self.seeds:
-            grouped.setdefault(seed.path, []).append(seed)
-        return {path: tuple(seeds) for path, seeds in grouped.items()}
+            grouped.setdefault(seed.path, {}).setdefault(seed.key, seed)
+        return {path: tuple(seeds.values()) for path, seeds in grouped.items()}
 
     @property
     def env_sources(self) -> tuple[str, ...]:
@@ -806,7 +809,6 @@ def _build_deck(spec: EnvSpec, secrets: _SecretRefs) -> DeckCtx:
 def _build_secrets(spec: EnvSpec, refs: _SecretRefs) -> SecretsCtx:
     enabled = spec.secrets.backend is SecretsBackend.VAULT
     return SecretsCtx(
-        backend=spec.secrets.backend,
         enabled=enabled,
         host=VAULT_HOST,
         mount=VAULT_MOUNT,

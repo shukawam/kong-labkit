@@ -70,8 +70,6 @@ Grafana の `Kong` フォルダに、`config/grafana/dashboards/` の定義が p
 | `secret/kong/ldap` | `ldap_password` | ラボ固定値 |
 | `secret/kong/ai-azure` | `header_value` | `.env` の `AZURE_OPENAI_API_KEY` |
 
-OpenAI の `header_value` だけは `Bearer ` を前置した完成形を格納します。Kong の vault 参照は値の一部に埋め込んでも解決されず、フィールドの値全体が参照である必要があるためです。
-
 Vault の UI は http://localhost:8200 で、トークンは `.env` の `VAULT_TOKEN` です。
 
 ## LDAP のユーザー

@@ -33,6 +33,17 @@ def test_bootstrap_puts_every_seed_into_the_kv():
     assert bootstrap["depends_on"] == {"vault": {"condition": "service_healthy"}}
 
 
+def test_bootstrap_writes_each_key_once_when_two_providers_share_a_type():
+    provider = {"type": "azure", "instance": "acme-foundry", "models": [{"name": "gpt-5-6"}]}
+    ctx = ctx_for(
+        gateway="ai-gateway-v1",
+        ai={"providers": [provider, {**provider, "instance": "acme-foundry-eu"}]},
+        secrets={"backend": "vault"},
+    )
+    script = compose_doc(ctx)["services"]["vault-bootstrap"]["entrypoint"][-1]
+    assert script.count('header_value="${AZURE_OPENAI_API_KEY}"') == 1
+
+
 def test_bootstrap_receives_env_backed_secrets():
     ctx = ctx_for(
         gateway="ai-gateway-v1",

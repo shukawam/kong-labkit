@@ -2,7 +2,6 @@
 description = "環境を起動する"
 run = '''
 set -euo pipefail
-
 docker compose up -d
 '''
 

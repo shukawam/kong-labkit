@@ -127,8 +127,10 @@ Grafana の `Kong` フォルダに、`config/grafana/dashboards/` の定義が p
 | `{{ secrets.mount }}/{{ secrets.prefix }}/{{ path }}` | `{{ seed.key }}` | {{ '`.env` の `' ~ seed.env_var ~ '`' if seed.env_var else 'ラボ固定値' }} |
 {% endfor %}
 {% endfor %}
+{% if secrets.seeds | selectattr('prefix') | list %}
 
 OpenAI の `header_value` だけは `Bearer ` を前置した完成形を格納します。Kong の vault 参照は値の一部に埋め込んでも解決されず、フィールドの値全体が参照である必要があるためです。
+{% endif %}
 
 Vault の UI は http://localhost:{{ ports.vault }} で、トークンは `.env` の `VAULT_TOKEN` です。
 {% endif %}

@@ -12,7 +12,7 @@
 description = "環境を起動する"
 run = '''
 set -euo pipefail
-{{ check_vault_env() }}
+{{ check_vault_env() -}}
 docker compose up -d
 '''
 

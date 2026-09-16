@@ -3,7 +3,6 @@ description = "環境を起動する"
 run = '''
 set -euo pipefail
 : "${AZURE_OPENAI_API_KEY:?Set AZURE_OPENAI_API_KEY in .env}"
-
 docker compose up -d
 '''
 
