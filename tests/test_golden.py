@@ -20,6 +20,33 @@ MINIMALS = {
 }
 
 
+def _gitignore_patterns(golden_dir: Path) -> list[str]:
+    return (golden_dir / ".gitignore").read_text(encoding="utf-8").split()
+
+
+def _is_ignored(relpath: str, patterns: list[str]) -> bool:
+    """生成物の .gitignore が外すパスか。ここに入るファイルは clone 直後には存在しない。"""
+    for pattern in patterns:
+        if pattern.endswith("/"):
+            if f"/{relpath}".find(f"/{pattern}") >= 0:
+                return True
+        elif relpath == pattern or relpath.endswith(f"/{pattern}"):
+            return True
+    return False
+
+
+def _comparable(files: dict[str, str], patterns: list[str]) -> dict[str, str]:
+    return {k: v for k, v in files.items() if not _is_ignored(k, patterns)}
+
+
+def _golden_files(golden_dir: Path) -> dict[str, str]:
+    return {
+        str(p.relative_to(golden_dir)): p.read_text(encoding="utf-8")
+        for p in golden_dir.rglob("*")
+        if p.is_file()
+    }
+
+
 def test_every_environment_has_a_minimal():
     assert MINIMALS <= {e.stem for e in EXAMPLES}
 
@@ -31,12 +58,9 @@ def test_output_matches_golden(example):
         f"{golden_dir} がありません。uv run python scripts/update_golden.py で作成してください。"
     )
 
-    produced = render_all(build_context(load_spec(example)))
-    expected = {
-        str(p.relative_to(golden_dir)): p.read_text(encoding="utf-8")
-        for p in golden_dir.rglob("*")
-        if p.is_file()
-    }
+    patterns = _gitignore_patterns(golden_dir)
+    produced = _comparable(render_all(build_context(load_spec(example))), patterns)
+    expected = _comparable(_golden_files(golden_dir), patterns)
 
     assert set(produced) == set(expected)
     for relpath in sorted(produced):
@@ -52,3 +76,29 @@ def test_golden_keeps_why_comments(example):
     compose = (golden_dir / "compose.yaml").read_text(encoding="utf-8")
     # docker compose config は正規化するためコメントとアンカーの消失を検知できない
     assert "x-default: &default" in compose
+
+
+def test_generated_secrets_stay_out_of_the_comparison():
+    """golden の .env は生成物で git 管理外。新しいクローンには存在しない。"""
+    patterns = _gitignore_patterns(ROOT / "tests" / "golden" / "apigw-konnect-minimal")
+    assert _is_ignored(".env", patterns)
+    assert _is_ignored("config/kong/certs/tls.crt", patterns)
+    assert not _is_ignored(".env.example", patterns)
+    assert not _is_ignored("compose.yaml", patterns)
+
+
+def test_comparison_passes_on_a_fresh_clone(tmp_path):
+    """git 管理外のファイルを落とした golden（＝clone 直後の状態）でも比較が通る。"""
+    example = ROOT / "examples" / "apigw-konnect-minimal.yaml"
+    golden_dir = ROOT / "tests" / "golden" / example.stem
+    fresh = tmp_path / example.stem
+    patterns = _gitignore_patterns(golden_dir)
+    for path in golden_dir.rglob("*"):
+        relpath = str(path.relative_to(golden_dir))
+        if not path.is_file() or _is_ignored(relpath, patterns):
+            continue
+        (fresh / relpath).parent.mkdir(parents=True, exist_ok=True)
+        (fresh / relpath).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert not (fresh / ".env").exists()
+    assert _comparable(render_all(build_context(load_spec(example))), patterns) == _golden_files(fresh)
