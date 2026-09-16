@@ -13,6 +13,7 @@ from generator.schema import (
     NewRelicSpec,
     ObservabilityBackend,
     ProviderType,
+    SecretsBackend,
     UpstreamType,
     VectorDbType,
 )
@@ -27,6 +28,13 @@ NEWRELIC_OTLP: dict[NewRelicRegion, str] = {
     NewRelicRegion.US: "https://otlp.nr-data.net",
     NewRelicRegion.EU: "https://otlp.eu01.nr-data.net",
 }
+
+
+VAULT_HOST = "vault"
+VAULT_MOUNT = "secret"
+VAULT_PATH_PREFIX = "kong"
+# ラボ固定。乱数にするとゴールデンテストが毎回落ちる
+VAULT_ROOT_TOKEN = "local-dev-token"
 
 
 class PortConflictError(Exception):
@@ -44,6 +52,7 @@ PREFERRED_PORTS: dict[str, int] = {
     "keycloak": 8080,
     "ldap": 3890,
     "lldap_web": 17170,
+    "vault": 8200,
     "httpbin": 8081,
     "cache": 6379,
     "kong_pg": 5432,
@@ -62,6 +71,7 @@ _ALLOCATION_ORDER = [
     "keycloak",
     "ldap",
     "lldap_web",
+    "vault",
     "httpbin",
     "cache",
     "kong_pg",
@@ -87,6 +97,8 @@ def _required_keys(spec: EnvSpec) -> set[str]:
         keys.add("cache")
     if spec.vectordb.type is VectorDbType.PGVECTOR:
         keys.add("vector_pg")
+    if spec.secrets.backend is SecretsBackend.VAULT:
+        keys.add("vault")
     return keys
 
 
@@ -172,6 +184,8 @@ class LdapCtx:
     admin_name: str
     bind_dn: str
     bind_password: str
+    # kong.yaml が書く形。vault 構成では参照文字列になる
+    bind_password_ref: str
     jwt_secret: str
     attribute: str
     users: tuple[LdapUserCtx, ...]
@@ -190,6 +204,7 @@ class IdpCtx:
     client_id: str | None
     # decK は ${VAR} を展開しないため、client secret の参照方法は idp の種類ごとに context が決める
     client_secret: str | None
+    client_secret_ref: str | None
     service_name: str | None
     public_client_id: str | None
     token_endpoint: str | None
@@ -300,6 +315,7 @@ class Ctx:
     semantic: SemanticCtx
     certs: CertsCtx
     deck: DeckCtx
+    secrets: SecretsCtx
     ports: dict[str, int]
     services: list[str]
     env_vars: dict[str, str]
@@ -334,21 +350,90 @@ LLDAP_JWT_SECRET = "local-dev-jwt-secret"
 LLDAP_TEST_USER = "tester"
 
 
-class _DeckEnv:
-    """decK から参照する環境変数の名前を決め、必要な別名を集める。
+@dataclass(frozen=True)
+class SecretSeed:
+    """vault-bootstrap が KV に投入する 1 項目。"""
+
+    path: str
+    key: str
+    env_var: str | None
+    prefix: str
+    literal: str | None
+
+    @property
+    def shell_value(self) -> str:
+        """bootstrap の sh から見た値。環境変数由来なら展開式、固定値ならそのまま。"""
+        if self.env_var:
+            return self.prefix + "${" + self.env_var + "}"
+        return self.prefix + (self.literal or "")
+
+
+@dataclass(frozen=True)
+class SecretsCtx:
+    enabled: bool
+    host: str
+    mount: str
+    prefix: str
+    token: str
+    seeds: tuple[SecretSeed, ...]
+
+    @property
+    def seeds_by_path(self) -> dict[str, tuple[SecretSeed, ...]]:
+        """vault kv put は 1 パスに複数キーをまとめて書けるので、パス単位に畳む。
+
+        同種のプロバイダを複数並べると同じ (path, key) が seeds に重複して積まれるため、
+        1 パスの中では key で一意化する（先勝ち）。
+        """
+        grouped: dict[str, dict[str, SecretSeed]] = {}
+        for seed in self.seeds:
+            grouped.setdefault(seed.path, {}).setdefault(seed.key, seed)
+        return {path: tuple(seeds.values()) for path, seeds in grouped.items()}
+
+    @property
+    def env_sources(self) -> tuple[str, ...]:
+        # dict.fromkeys で宣言順を保ったまま重複を潰す
+        return tuple(dict.fromkeys(s.env_var for s in self.seeds if s.env_var))
+
+
+class _SecretRefs:
+    """設定に書く参照文字列を決め、必要な別名と Vault への投入項目を集める。
 
     decK が展開するのは ${{ env "DECK_..." }} だけで、裸の ${VAR} はただの文字列になる。
+    vault 構成では参照文字列がそのまま設定に残り、解決はデータプレーンが行う。
     """
 
-    def __init__(self, enabled: bool) -> None:
-        self.enabled = enabled
+    def __init__(self, backend: SecretsBackend, deck_enabled: bool) -> None:
+        self.backend = backend
+        self.deck_enabled = deck_enabled
         self.aliases: dict[str, str] = {}
+        self.seeds: list[SecretSeed] = []
 
-    def ref(self, source: str) -> str:
+    def env(self, source: str) -> str:
+        """秘密ではない識別子。backend によらず decK の env 参照のままにする。"""
         alias = DECK_ENV_PREFIX + source
-        if self.enabled:
+        if self.deck_enabled:
             self.aliases[alias] = source
         return '${{ env "' + alias + '" }}'
+
+    def secret_from_env(self, source: str, *, path: str, key: str, prefix: str = "") -> str:
+        if self.backend is SecretsBackend.VAULT:
+            self.seeds.append(
+                SecretSeed(path=path, key=key, env_var=source, prefix=prefix, literal=None)
+            )
+            return self._vault_ref(path, key)
+        return prefix + self.env(source)
+
+    def secret_from_literal(self, value: str, *, path: str, key: str) -> str:
+        if self.backend is SecretsBackend.VAULT:
+            self.seeds.append(
+                SecretSeed(path=path, key=key, env_var=None, prefix="", literal=value)
+            )
+            return self._vault_ref(path, key)
+        return value
+
+    @staticmethod
+    def _vault_ref(path: str, key: str) -> str:
+        return "{vault://hcv/" + f"{VAULT_PATH_PREFIX}/{path}/{key}" + "}"
 
 
 def _yaml_scalar(value: str) -> str:
@@ -370,7 +455,7 @@ def _build_ldap_users(spec: EnvSpec) -> tuple[LdapUserCtx, ...]:
     )
 
 
-def _build_ldap(spec: EnvSpec, ports: dict[str, int]) -> LdapCtx:
+def _build_ldap(spec: EnvSpec, ports: dict[str, int], refs: _SecretRefs) -> LdapCtx:
     base_dn = f"dc={spec.customer},dc=local"
     users_dn = f"ou=people,{base_dn}"
     users = _build_ldap_users(spec)
@@ -388,6 +473,9 @@ def _build_ldap(spec: EnvSpec, ports: dict[str, int]) -> LdapCtx:
         # lldap は ldap_user_dn に素の名前を受け取り、cn=<name>,ou=people,<base> を組み立てる
         bind_dn=f"cn={LLDAP_ADMIN_NAME},{users_dn}",
         bind_password=LLDAP_ADMIN_PASSWORD,
+        bind_password_ref=refs.secret_from_literal(
+            LLDAP_ADMIN_PASSWORD, path="ldap", key="ldap_password"
+        ),
         jwt_secret=LLDAP_JWT_SECRET,
         attribute="uid",
         users=users,
@@ -395,7 +483,7 @@ def _build_ldap(spec: EnvSpec, ports: dict[str, int]) -> LdapCtx:
     )
 
 
-def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpCtx:
+def _build_idp(spec: EnvSpec, ports: dict[str, int], refs: _SecretRefs) -> IdpCtx:
     if spec.idp.type is IdpType.KEYCLOAK:
         realm = spec.idp.realm
         return IdpCtx(
@@ -408,6 +496,9 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpC
             client_id=f"{spec.customer}-client",
             # ローカル固定値なので decK の env 参照にせず実値を埋める。realm-export と出所を 1 つにする
             client_secret=KEYCLOAK_CLIENT_SECRET,
+            client_secret_ref=refs.secret_from_literal(
+                KEYCLOAK_CLIENT_SECRET, path="oidc", key="client_secret"
+            ),
             service_name="keycloak",
             public_client_id=f"{spec.customer}-public",
             token_endpoint=(
@@ -419,7 +510,7 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpC
         )
     if spec.idp.type is IdpType.ENTRA_ID:
         # テナント ID は生成時に判明しないため decK の env 参照として渡す
-        tenant = deck_env.ref("AZURE_TENANT_ID")
+        tenant = refs.env("AZURE_TENANT_ID")
         return IdpCtx(
             type=IdpType.ENTRA_ID,
             enabled=True,
@@ -427,8 +518,11 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpC
             ldap=None,
             realm=None,
             issuer=f"https://login.microsoftonline.com/{tenant}/v2.0",
-            client_id=deck_env.ref("AZURE_CLIENT_ID"),
-            client_secret=deck_env.ref("AZURE_CLIENT_SECRET"),
+            client_id=refs.env("AZURE_CLIENT_ID"),
+            client_secret=None,
+            client_secret_ref=refs.secret_from_env(
+                "AZURE_CLIENT_SECRET", path="oidc", key="client_secret"
+            ),
             service_name=None,
             public_client_id=None,
             # 無人でトークンを取得する経路が無いため、スモークは応答コードの確認に落とす
@@ -437,7 +531,7 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpC
             test_password=None,
         )
     if spec.idp.type is IdpType.LDAP:
-        ldap = _build_ldap(spec, ports)
+        ldap = _build_ldap(spec, ports, refs)
         return IdpCtx(
             type=IdpType.LDAP,
             enabled=True,
@@ -447,6 +541,7 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpC
             issuer=None,
             client_id=None,
             client_secret=None,
+            client_secret_ref=None,
             service_name="lldap",
             public_client_id=None,
             token_endpoint=None,
@@ -463,6 +558,7 @@ def _build_idp(spec: EnvSpec, ports: dict[str, int], deck_env: _DeckEnv) -> IdpC
         issuer=None,
         client_id=None,
         client_secret=None,
+        client_secret_ref=None,
         service_name=None,
         public_client_id=None,
         token_endpoint=None,
@@ -576,6 +672,8 @@ def _build_services(spec: EnvSpec) -> list[str]:
         services.append("keycloak")
     if spec.idp.type is IdpType.LDAP:
         services += ["lldap", "lldap-bootstrap"]
+    if spec.secrets.backend is SecretsBackend.VAULT:
+        services += ["vault", "vault-bootstrap"]
     if spec.observability.backend is not ObservabilityBackend.NONE:
         services.append(OTEL_SERVICE[spec.observability.backend])
     return services
@@ -594,6 +692,9 @@ def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
 
     if spec.observability.backend is ObservabilityBackend.NEWRELIC:
         env["NEW_RELIC_LICENSE_KEY"] = ""
+
+    if spec.secrets.backend is SecretsBackend.VAULT:
+        env["VAULT_TOKEN"] = VAULT_ROOT_TOKEN
 
     if spec.control_plane is ControlPlane.KONNECT:
         env["CONTROL_PLANE_ID"] = ""
@@ -640,51 +741,80 @@ def _build_certs(spec: EnvSpec, kong: KongCtx) -> CertsCtx:
     )
 
 
-def _build_provider_auth(provider, deck_env: _DeckEnv) -> dict[str, str]:
+def _build_provider_auth(provider, secrets: _SecretRefs) -> dict[str, str]:
+    path = f"ai-{provider.type.value}"
     if provider.type is ProviderType.AZURE:
         if provider.auth is AuthType.MANAGED_IDENTITY:
             return {
                 "azure_use_managed_identity": "true",
-                "azure_client_id": _yaml_scalar(deck_env.ref("AZURE_CLIENT_ID")),
-                "azure_tenant_id": _yaml_scalar(deck_env.ref("AZURE_TENANT_ID")),
+                "azure_client_id": _yaml_scalar(secrets.env("AZURE_CLIENT_ID")),
+                "azure_tenant_id": _yaml_scalar(secrets.env("AZURE_TENANT_ID")),
             }
         return {
             "header_name": "api-key",
-            "header_value": _yaml_scalar(deck_env.ref("AZURE_OPENAI_API_KEY")),
+            "header_value": _yaml_scalar(
+                secrets.secret_from_env("AZURE_OPENAI_API_KEY", path=path, key="header_value")
+            ),
         }
     if provider.type is ProviderType.OPENAI:
         return {
             "header_name": "Authorization",
-            "header_value": _yaml_scalar("Bearer " + deck_env.ref("OPENAI_API_KEY")),
+            "header_value": _yaml_scalar(
+                secrets.secret_from_env(
+                    "OPENAI_API_KEY", path=path, key="header_value", prefix="Bearer "
+                )
+            ),
         }
     if provider.type is ProviderType.ANTHROPIC:
         return {
             "header_name": "x-api-key",
-            "header_value": _yaml_scalar(deck_env.ref("ANTHROPIC_API_KEY")),
+            "header_value": _yaml_scalar(
+                secrets.secret_from_env("ANTHROPIC_API_KEY", path=path, key="header_value")
+            ),
         }
     if provider.type is ProviderType.BEDROCK:
         return {
-            "aws_access_key_id": _yaml_scalar(deck_env.ref("AWS_ACCESS_KEY_ID")),
-            "aws_secret_access_key": _yaml_scalar(deck_env.ref("AWS_SECRET_ACCESS_KEY")),
+            "aws_access_key_id": _yaml_scalar(
+                secrets.secret_from_env("AWS_ACCESS_KEY_ID", path=path, key="aws_access_key_id")
+            ),
+            "aws_secret_access_key": _yaml_scalar(
+                secrets.secret_from_env(
+                    "AWS_SECRET_ACCESS_KEY", path=path, key="aws_secret_access_key"
+                )
+            ),
         }
     return {
         "gcp_use_service_account": "true",
         # パスではなくサービスアカウント JSON の中身そのものを渡す必要がある
         "gcp_service_account_json": _yaml_scalar(
-            deck_env.ref("GOOGLE_APPLICATION_CREDENTIALS")
+            secrets.secret_from_env(
+                "GOOGLE_APPLICATION_CREDENTIALS", path=path, key="gcp_service_account_json"
+            )
         ),
     }
 
 
-def _build_deck(spec: EnvSpec, deck_env: _DeckEnv) -> DeckCtx:
-    provider_auth = [_build_provider_auth(p, deck_env) for p in spec.ai.providers]
+def _build_deck(spec: EnvSpec, secrets: _SecretRefs) -> DeckCtx:
+    provider_auth = [_build_provider_auth(p, secrets) for p in spec.ai.providers]
     first = spec.ai.providers[0] if spec.ai.providers else None
     return DeckCtx(
-        env_aliases=deck_env.aliases,
+        env_aliases=secrets.aliases,
         provider_auth=provider_auth,
         # 埋め込みモデルは先頭のプロバイダに属するものとして扱う
         embeddings_provider=first.type.value if first else None,
         embeddings_auth=provider_auth[0] if provider_auth else None,
+    )
+
+
+def _build_secrets(spec: EnvSpec, refs: _SecretRefs) -> SecretsCtx:
+    enabled = spec.secrets.backend is SecretsBackend.VAULT
+    return SecretsCtx(
+        enabled=enabled,
+        host=VAULT_HOST,
+        mount=VAULT_MOUNT,
+        prefix=VAULT_PATH_PREFIX,
+        token=VAULT_ROOT_TOKEN,
+        seeds=tuple(refs.seeds) if enabled else (),
     )
 
 
@@ -700,8 +830,9 @@ def build_context(spec: EnvSpec) -> Ctx:
     ports = allocate_ports(spec)
     kong = _build_kong(spec)
     # ai-gateway-v2 は kongctl 経路なので decK の別名は要らない
-    deck_env = _DeckEnv(enabled=spec.gateway is not Gateway.AI_GATEWAY_V2)
-    idp = _build_idp(spec, ports, deck_env)
+    refs = _SecretRefs(spec.secrets.backend, deck_enabled=spec.gateway is not Gateway.AI_GATEWAY_V2)
+    idp = _build_idp(spec, ports, refs)
+    deck = _build_deck(spec, refs)
     return Ctx(
         spec=spec,
         kong=kong,
@@ -712,7 +843,8 @@ def build_context(spec: EnvSpec) -> Ctx:
         upstream=_build_upstream(spec),
         semantic=_build_semantic(spec),
         certs=_build_certs(spec, kong),
-        deck=_build_deck(spec, deck_env),
+        deck=deck,
+        secrets=_build_secrets(spec, refs),
         ports=ports,
         services=_build_services(spec),
         env_vars=_build_env_vars(spec),

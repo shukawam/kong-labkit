@@ -1,0 +1,9 @@
+{
+  "id": "tester",
+  "email": "tester@example.com",
+  "password": "tester-password",
+  "displayName": "tester",
+  "groups": [
+    "acme-ai-users"
+  ]
+}

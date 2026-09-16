@@ -3,9 +3,18 @@
 : "{{ '${' ~ source ~ ':?Set ' ~ source ~ ' in .env}' }}"
 {% endfor %}
 {%- endmacro %}
+{% macro check_vault_env() -%}
+{% for source in secrets.env_sources %}
+: "{{ '${' ~ source ~ ':?Set ' ~ source ~ ' in .env}' }}"
+{% endfor %}
+{%- endmacro %}
 [tasks.up]
 description = "環境を起動する"
-run = "docker compose up -d"
+run = '''
+set -euo pipefail
+{{ check_vault_env() -}}
+docker compose up -d
+'''
 
 [tasks.down]
 description = "環境を停止する"
@@ -37,6 +46,7 @@ description = "証明書の用意から環境の起動までを通しで行う"
 run = '''
 set -euo pipefail
 {{ check_deck_env() }}
+{{ check_vault_env() }}
 
 if [ ! -f {{ certs.crt_path }} ]; then
   mise run certs

@@ -49,6 +49,7 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 |---|---|
 | `aigw-v2-konnect-redis-stack.yaml` | semantic cache を redis-stack で有効にする |
 | `aigw-v1-konnect-lldap.yaml` | lldap を IdP として同梱する |
+| `aigw-v1-konnect-vault.yaml` | 秘匿情報のバックエンドを Vault にする |
 | `apigw-self-managed-keycloak.yaml` | Keycloak を IdP として同梱する |
 
 ## オプション
@@ -71,6 +72,7 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 | `vectordb.type` | `redis-stack` / `pgvector` / `none` | `none` | `redis-stack` は `cache.type: redis-stack` が必須 |
 | `observability.backend` | `otel-lgtm` / `newrelic` / `none` | `otel-lgtm` | `newrelic` は素の OTel Collector を同梱し、Grafana とダッシュボードは生成しない |
 | `observability.newrelic.region` | `us` / `eu` | `us` | `backend: newrelic` のときだけ指定できる |
+| `secrets.backend` | `env` / `vault` | `env` | `vault` は Vault を同梱し、kong.yaml の秘密を `{vault://hcv/...}` 参照にする。`ai-gateway-v2` とは併用不可 |
 | `upstream` | `httpbin` / `none` | `api-gateway` なら `httpbin` | |
 
 ## 弾かれる組み合わせ
@@ -82,6 +84,8 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 `ai-gateway-v2` と `idp.type: ldap` は併用できません。v2 の設定は `config/kongctl.yaml` の AI Gateway エンティティだけで、`ldap-auth-advanced` のようなプラグインを書く経路が generator にありません。
 
 `vectordb.type: redis-stack` には `cache.type: redis-stack` が必要です。素の `redis:8` には検索モジュールが入っておらず、`none` ではコンテナ自体が存在しません。
+
+`secrets.backend: vault` と `ai-gateway-v2` は併用できません。v2 の設定は `config/kongctl.yaml` の AI Gateway エンティティだけで、そこが vault 参照を受け付けるか検証できていないためです。
 
 ## テスト
 

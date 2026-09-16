@@ -22,6 +22,18 @@
 
 `generator/context.py` の vertex 分岐が `GOOGLE_APPLICATION_CREDENTIALS`（慣習としてファイルパスを入れる欄）をそのまま `gcp_service_account_json` に渡している。Kong が要求するのは JSON の中身そのもの。`.env` の `KEY="value"` 形式に複数行 JSON を入れられないため、base64 で持つかファイルをマウントするか、渡し方自体の設計が必要。
 
+### `secrets.backend: vault` が AI Gateway v2 で使えない
+
+v2 の設定は `config/kongctl.yaml` の AI Gateway エンティティだけで、Konnect 側が vault 参照を受け付けるかを検証できていないため schema で弾いている。v2 を Vault 構成で見せたい案件が出たら、kongctl 経路の検証から始める必要がある。
+
+### vault 参照は文字列連結ができない
+
+Kong はフィールドの値全体が `{vault://...}` である場合にのみ解決する。値の一部に埋め込むとリテラル文字列として扱われ、認証が黙って失敗する。generator は OpenAI の `header_value` について `Bearer ` を前置した完成形を Vault に入れることで回避している。同じ形の秘密を足すときは、前置が必要かを確認すること。
+
+### 同梱の dev Vault は再起動で中身が消える
+
+`hashicorp/vault` を dev モードで動かしているためメモリ保持で、`docker compose restart vault` すると KV が空になる。`vault-bootstrap` の流し直しが必要。
+
 ## 構造（実害は出ていないが、将来の修正が片側だけ入る形）
 
 データプレーンのサービス名が構成によって `kong` / `gateway` / `kong-dp` の 3 種類になり、`kong-aigw-v2.yaml.j2` と `kong-dp.yaml.j2` は image 以外が同一。`ctx.kong.service_name` を作って 1 枚に統合すると、`mise run logs <service>` と README がサービス名を一意に示せるようになる。

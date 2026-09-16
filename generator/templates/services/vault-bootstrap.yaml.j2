@@ -1,0 +1,24 @@
+vault-bootstrap:
+  <<: *default
+  container_name: vault-bootstrap
+  image: hashicorp/vault:2.1.0
+  # x-default の on-failure のままだと、投入が終わった後も延々と再実行される
+  restart: "no"
+  environment:
+    VAULT_ADDR: http://{{ secrets.host }}:8200
+    VAULT_TOKEN: ${VAULT_TOKEN:-{{ secrets.token }}}
+{% for source in secrets.env_sources %}
+    {{ source }}: ${{ '{' }}{{ source }}{{ '}' }}
+{% endfor %}
+  entrypoint:
+    - sh
+    - -e
+    - -c
+    - |
+{% for path, seeds in secrets.seeds_by_path.items() %}
+      vault kv put -mount={{ secrets.mount }} {{ secrets.prefix }}/{{ path }}{% for seed in seeds %} {{ seed.key }}="{{ seed.shell_value }}"{% endfor %}
+
+{% endfor %}
+  depends_on:
+    vault:
+      condition: service_healthy

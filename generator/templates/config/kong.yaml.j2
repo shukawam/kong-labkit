@@ -7,7 +7,7 @@ _format_version: "3.0"
           client_id:
             - '{{ idp.client_id }}'
           client_secret:
-            - '{{ idp.client_secret }}'
+            - '{{ idp.client_secret_ref }}'
           # decK が明示値なしの sync を拒否するため固定値を設定する
           cache_tokens_salt: local-dev-salt
           auth_methods:
@@ -20,7 +20,7 @@ _format_version: "3.0"
           ldap_port: 3890
           # 検索してから bind するので、ユーザーの DN を組み立てる必要がない
           bind_dn: {{ idp.ldap.bind_dn }}
-          ldap_password: {{ idp.ldap.bind_password }}
+          ldap_password: '{{ idp.ldap.bind_password_ref }}'
           base_dn: {{ idp.ldap.users_dn }}
           attribute: {{ idp.ldap.attribute }}
           header_type: ldap

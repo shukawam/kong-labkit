@@ -1,0 +1,151 @@
+x-default: &default
+  networks:
+    - kong-network
+  restart: on-failure
+
+# 過去に踏んだ罠。expressions でないと新しいルータ構文のルートが動かず、
+# TRUSTED_IPS / REAL_IP を外すと X-Forwarded-For が上流で信用されず元クライアント IP を失う
+x-kong-hardening: &kong-hardening
+  KONG_ROUTER_FLAVOR: expressions
+  KONG_TRUSTED_IPS: 0.0.0.0/0
+  KONG_REAL_IP_HEADER: X-Forwarded-For
+  KONG_REAL_IP_RECURSIVE: "on"
+
+networks:
+  kong-network:
+
+services:
+  gateway:
+    <<: *default
+    container_name: gateway
+    image: kong/kong-gateway:3.14
+    ports:
+      - 8000:8000
+      - 8100:8100
+    environment:
+      <<: *kong-hardening
+      KONG_ROLE: data_plane
+      KONG_DATABASE: "off"
+      KONG_VITALS: "off"
+      KONG_CLUSTER_MTLS: pki
+      KONG_CLUSTER_CONTROL_PLANE: ${CONTROL_PLANE_ID:-}.us.cp.konghq.com:443
+      KONG_CLUSTER_SERVER_NAME: ${CONTROL_PLANE_ID:-}.us.cp.konghq.com
+      KONG_CLUSTER_TELEMETRY_ENDPOINT: ${CONTROL_PLANE_ID:-}.us.tp.konghq.com:443
+      KONG_CLUSTER_TELEMETRY_SERVER_NAME: ${CONTROL_PLANE_ID:-}.us.tp.konghq.com
+      KONG_CLUSTER_CERT: /etc/kong/cluster-certs/cluster.crt
+      KONG_CLUSTER_CERT_KEY: /etc/kong/cluster-certs/cluster.key
+      KONG_LUA_SSL_TRUSTED_CERTIFICATE: system
+      KONG_KONNECT_MODE: "on"
+      KONG_CLUSTER_DP_LABELS: type:docker-macOsArmOS
+      KONG_STATUS_LISTEN: 0.0.0.0:8100
+      KONG_LOG_LEVEL: debug
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_TRACING_INSTRUMENTATIONS: all
+      KONG_TRACING_SAMPLING_RATE: "1.0"
+      KONG_VAULT_HCV_PROTOCOL: http
+      KONG_VAULT_HCV_HOST: vault
+      KONG_VAULT_HCV_PORT: "8200"
+      KONG_VAULT_HCV_MOUNT: secret
+      # 既定は v1。dev モードの Vault は KV v2 なので、外すと全参照が解決できなくなる
+      KONG_VAULT_HCV_KV: v2
+      KONG_VAULT_HCV_TOKEN: ${VAULT_TOKEN:-local-dev-token}
+    depends_on:
+      vault-bootstrap:
+        condition: service_completed_successfully
+    volumes:
+      - .certs:/etc/kong/cluster-certs
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+  lldap:
+    <<: *default
+    container_name: lldap
+    image: lldap/lldap:v0.6.3-alpine
+    environment:
+      LLDAP_JWT_SECRET: ${LLDAP_JWT_SECRET:-local-dev-jwt-secret}
+      LLDAP_LDAP_BASE_DN: dc=acme,dc=local
+      LLDAP_LDAP_USER_DN: ${LLDAP_ADMIN_USERNAME:-admin}
+      LLDAP_LDAP_USER_PASS: ${LLDAP_ADMIN_PASSWORD:-local-dev-password}
+    ports:
+      - 3890:3890
+      - 17170:17170
+    # entrypoint は /data に書き込めないと起動前に終了する
+    volumes:
+      - lldap-data:/data
+  lldap-bootstrap:
+    <<: *default
+    container_name: lldap-bootstrap
+    image: lldap/lldap:v0.6.3-alpine
+    # x-default の on-failure のままだと、投入が終わった後も延々と再実行される
+    restart: "no"
+    # イメージには入っているが entrypoint からは呼ばれないので、使い捨てのジョブとして直接叩く
+    entrypoint: ["/app/bootstrap.sh"]
+    environment:
+      LLDAP_URL: http://lldap:17170
+      LLDAP_ADMIN_USERNAME: ${LLDAP_ADMIN_USERNAME:-admin}
+      LLDAP_ADMIN_PASSWORD: ${LLDAP_ADMIN_PASSWORD:-local-dev-password}
+    volumes:
+      - ./config/lldap:/bootstrap:ro
+    depends_on:
+      lldap:
+        condition: service_healthy
+  vault:
+    <<: *default
+    container_name: vault
+    image: hashicorp/vault:2.1.0
+    # dev モードは自動で unseal され KV v2 が secret/ に載る。ラボ用途なので永続化しない
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_TOKEN:-local-dev-token}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_ADDR: http://127.0.0.1:8200
+    ports:
+      - 8200:8200
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  vault-bootstrap:
+    <<: *default
+    container_name: vault-bootstrap
+    image: hashicorp/vault:2.1.0
+    # x-default の on-failure のままだと、投入が終わった後も延々と再実行される
+    restart: "no"
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_TOKEN:-local-dev-token}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
+    entrypoint:
+      - sh
+      - -e
+      - -c
+      - |
+        vault kv put -mount=secret kong/ldap ldap_password="local-dev-password"
+        vault kv put -mount=secret kong/ai-azure header_value="${AZURE_OPENAI_API_KEY}"
+    depends_on:
+      vault:
+        condition: service_healthy
+  otel-lgtm:
+    <<: *default
+    container_name: otel-lgtm
+    image: grafana/otel-lgtm:0.25.0
+    ports:
+      - 3000:3000
+      - 4317:4317
+      - 4318:4318
+    # provisioning ディレクトリごと差し替えると同梱の RED metrics ダッシュボードが消えるので、
+    # プロバイダ定義とダッシュボード置き場だけを足す。置き場が conf/provisioning の外にあると
+    # Grafana の permitted_provisioning_paths に弾かれる
+    volumes:
+      - ./config/otel-lgtm/otelcol-config.yaml:/otel-lgtm/otelcol-config.yaml:ro
+      - ./config/grafana/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/kong.yaml:ro
+      - ./config/grafana/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards/kong:ro
+
+volumes:
+  lldap-data:

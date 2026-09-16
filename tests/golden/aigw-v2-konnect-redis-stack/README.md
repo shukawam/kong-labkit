@@ -12,6 +12,7 @@
 | キャッシュ | redis-stack |
 | ベクトル DB | redis-stack |
 | Observability | otel-lgtm |
+| 秘匿情報 | 環境変数 |
 
 ## 前提
 

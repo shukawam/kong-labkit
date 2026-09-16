@@ -56,7 +56,8 @@ def test_entra_issuer_uses_deck_env_reference():
         'https://login.microsoftonline.com/${{ env "DECK_AZURE_TENANT_ID" }}/v2.0'
     )
     assert idp.client_id == '${{ env "DECK_AZURE_CLIENT_ID" }}'
-    assert idp.client_secret == '${{ env "DECK_AZURE_CLIENT_SECRET" }}'
+    # client_secret は kong.yaml では使わなくなった。参照は client_secret_ref 側に出る
+    assert idp.client_secret_ref == '${{ env "DECK_AZURE_CLIENT_SECRET" }}'
     assert idp.service_name is None
 
 
@@ -459,3 +460,103 @@ def test_konnect_name_does_not_touch_the_keycloak_client_ids():
 
 def test_certs_common_name_follows_the_control_plane_name():
     assert build_context(spec_from(konnect_name="bluesky")).certs.common_name == "bluesky-gateway"
+
+
+OPENAI_PROVIDER = {"type": "openai", "models": [{"name": "gpt-5-6"}]}
+
+
+def aigw_spec(**overrides):
+    return spec_from(gateway="ai-gateway-v1", ai={"providers": [AZURE_PROVIDER]}, **overrides)
+
+
+def test_provider_auth_uses_deck_env_by_default():
+    auth = build_context(aigw_spec()).deck.provider_auth[0]
+    assert auth["header_value"] == "'${{ env \"DECK_AZURE_OPENAI_API_KEY\" }}'"
+
+
+def test_provider_auth_uses_a_vault_reference():
+    ctx = build_context(aigw_spec(secrets={"backend": "vault"}))
+    assert ctx.deck.provider_auth[0]["header_value"] == "'{vault://hcv/kong/ai-azure/header_value}'"
+    # vault 構成では decK に渡す環境変数が要らなくなる
+    assert ctx.deck.env_aliases == {}
+
+
+def test_vault_seeds_carry_the_env_var_to_inject():
+    ctx = build_context(aigw_spec(secrets={"backend": "vault"}))
+    seed = ctx.secrets.seeds[0]
+    assert (seed.path, seed.key, seed.env_var) == ("ai-azure", "header_value", "AZURE_OPENAI_API_KEY")
+    assert seed.shell_value == "${AZURE_OPENAI_API_KEY}"
+
+
+def test_openai_bearer_prefix_moves_into_the_vault_value():
+    """Kong は値の一部に埋めた参照を解決しない。Bearer ごと Vault に入れる必要がある。"""
+    ctx = build_context(
+        spec_from(gateway="ai-gateway-v1", ai={"providers": [OPENAI_PROVIDER]}, secrets={"backend": "vault"})
+    )
+    assert ctx.deck.provider_auth[0]["header_value"] == "'{vault://hcv/kong/ai-openai/header_value}'"
+    assert ctx.secrets.seeds[0].shell_value == "Bearer ${OPENAI_API_KEY}"
+
+
+def test_openai_bearer_prefix_stays_inline_for_the_env_backend():
+    auth = build_context(
+        spec_from(gateway="ai-gateway-v1", ai={"providers": [OPENAI_PROVIDER]})
+    ).deck.provider_auth[0]
+    assert auth["header_value"] == "'Bearer ${{ env \"DECK_OPENAI_API_KEY\" }}'"
+
+
+def test_identifiers_stay_on_the_env_backend_even_with_vault():
+    """client_id / tenant_id は秘密ではないので Vault に入れない。"""
+    provider = {**AZURE_PROVIDER, "auth": "managed-identity"}
+    ctx = build_context(
+        spec_from(gateway="ai-gateway-v1", ai={"providers": [provider]}, secrets={"backend": "vault"})
+    )
+    auth = ctx.deck.provider_auth[0]
+    assert auth["azure_client_id"] == "'${{ env \"DECK_AZURE_CLIENT_ID\" }}'"
+    assert ctx.secrets.seeds == ()
+
+
+def test_secrets_context_is_disabled_by_default():
+    secrets = build_context(spec_from()).secrets
+    assert secrets.enabled is False
+    assert secrets.seeds == ()
+
+
+def test_secrets_context_describes_the_vault():
+    secrets = build_context(aigw_spec(secrets={"backend": "vault"})).secrets
+    assert (secrets.enabled, secrets.host, secrets.mount, secrets.prefix) == (
+        True,
+        "vault",
+        "secret",
+        "kong",
+    )
+    assert secrets.env_sources == ("AZURE_OPENAI_API_KEY",)
+
+
+def test_ldap_password_is_a_literal_by_default():
+    idp = build_context(spec_from(idp={"type": "ldap"})).idp
+    assert idp.ldap.bind_password_ref == idp.ldap.bind_password
+
+
+def test_ldap_password_becomes_a_vault_reference():
+    ctx = build_context(spec_from(idp={"type": "ldap"}, secrets={"backend": "vault"}))
+    assert ctx.idp.ldap.bind_password_ref == "{vault://hcv/kong/ldap/ldap_password}"
+    # lldap コンテナ自身は実値が要るので、こちらは平文のまま残る
+    assert ctx.idp.ldap.bind_password == "local-dev-password"
+    seed = next(s for s in ctx.secrets.seeds if s.path == "ldap")
+    assert (seed.key, seed.literal) == ("ldap_password", "local-dev-password")
+
+
+def test_keycloak_client_secret_becomes_a_vault_reference():
+    ctx = build_context(
+        spec_from(idp={"type": "keycloak", "realm": "acme"}, secrets={"backend": "vault"})
+    )
+    assert ctx.idp.client_secret_ref == "{vault://hcv/kong/oidc/client_secret}"
+    # realm-export.json は Keycloak 側の設定なので実値が要る
+    assert ctx.idp.client_secret == "local-dev-secret"
+
+
+def test_entra_client_secret_becomes_a_vault_reference():
+    ctx = build_context(spec_from(idp={"type": "entra-id"}, secrets={"backend": "vault"}))
+    assert ctx.idp.client_secret_ref == "{vault://hcv/kong/oidc/client_secret}"
+    # client_id は秘密ではないので decK の env 参照のまま
+    assert ctx.idp.client_id == '${{ env "DECK_AZURE_CLIENT_ID" }}'
