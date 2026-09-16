@@ -88,6 +88,10 @@ def _status(cwd: Path, credentials: str) -> str:
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        # 空文字を返すと呼び出し側は "200 と一致しない" として最後までポーリングし続け、
+        # 失敗理由（curl 自体が落ちていたこと）が最終メッセージから消える
+        return f"<curl failed: exit {result.returncode}: {result.stderr.strip()}>"
     return result.stdout
 
 
