@@ -126,6 +126,25 @@ ai_gateways:
             strip_path: true
 {% endfor %}
 {% endfor %}
+{% if prompt_guard.enabled %}
+
+    policies:
+      - ref: {{ kong.cp_name }}-ai-prompt-guard
+        ai_gateway: !ref {{ kong.cp_name }}#id
+        name: ai-prompt-guard
+        display_name: AI Prompt Guard
+        type: ai-prompt-guard
+        global: true
+        enabled: true
+        config:
+          llm_format: {{ prompt_guard.llm_format }}
+          continue_on_detection: {{ 'true' if prompt_guard.continue_on_detection else 'false' }}
+          rejection_mode: {{ prompt_guard.rejection_mode }}
+          deny_patterns:
+{% for pattern in prompt_guard.patterns %}
+            - '{{ pattern }}'
+{% endfor %}
+{% endif %}
 
     data_plane_certificates:
       - ref: {{ kong.cp_name }}-cert

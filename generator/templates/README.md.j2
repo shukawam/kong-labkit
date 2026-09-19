@@ -13,6 +13,7 @@
 | ベクトル DB | {{ spec.vectordb.type.value }} |
 | Observability | {% if otel.backend.value == 'newrelic' %}New Relic（{{ otel.nr_endpoint }}）{% elif otel.enabled %}{{ otel.backend.value }}{% else %}なし{% endif %} |
 | 秘匿情報 | {{ 'HashiCorp Vault' if secrets.enabled else '環境変数' }} |
+| Prompt Guard | {{ spec.ai.prompt_guard.value if prompt_guard.enabled else 'なし' }} |
 
 ## 前提
 
@@ -133,6 +134,20 @@ OpenAI の `header_value` だけは `Bearer ` を前置した完成形を格納�
 {% endif %}
 
 Vault の UI は http://localhost:{{ ports.vault }} で、トークンは `.env` の `VAULT_TOKEN` です。
+{% endif %}
+{% if prompt_guard.enabled %}
+
+## Prompt Guard
+
+`ai-prompt-guard` を全ルートに掛けて、LLM リクエストの本文を `deny_patterns` と突き合わせます。パターンは `generator/context.py` の `PROMPT_GUARD_DENY_PATTERNS` から来ていて、ゼロ幅文字・双方向制御文字・タグ文字による迂回の除外と、プロンプトインジェクション（指示の上書き、システムプロンプトの窃取、ガードレール解除、間接インジェクション）の検出が入っています。
+
+{% if spec.gateway.value == 'ai-gateway-v2' %}
+モードは `{{ spec.ai.prompt_guard.value }}` です。{% if prompt_guard.continue_on_detection %}検知してもリクエストは通します（`continue_on_detection: true`）。誤検知の実態を見てから `ai.prompt_guard: block` に倒してください。{% else %}検知したらブロックします。{% endif %}拒否時の応答は `rejection_mode: verbose` なので、どのパターンに当たったかが応答本文に出ます。
+{% else %}
+`kong-gateway:{{ kong.image.split(':')[1] }}` の `ai-prompt-guard` には `continue_on_detection` と `rejection_mode` が無いため、**検知したら必ずブロック**します。検知しても通す観測モードは AI Gateway v2 のデータプレーンにしかありません。
+{% endif %}
+
+パターンに当たることを確かめるには、`/v1/chat/completions` に `ignore all previous instructions` を含む本文を投げてください。
 {% endif %}
 {% if idp.ldap %}
 

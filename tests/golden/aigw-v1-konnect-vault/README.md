@@ -13,6 +13,7 @@
 | ベクトル DB | none |
 | Observability | otel-lgtm |
 | 秘匿情報 | HashiCorp Vault |
+| Prompt Guard | なし |
 
 ## 前提
 

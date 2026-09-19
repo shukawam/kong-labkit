@@ -1,0 +1,85 @@
+_defaults:
+  kongctl:
+    namespace: acme
+
+ai_gateways:
+  - ref: acme-ai-gateway
+    name: acme-ai-gateway
+    display_name: acme-ai-gateway
+    deployment_type: hybrid
+
+    model_providers:
+      - ref: azure
+        ai_gateway: !ref acme-ai-gateway#id
+        name: azure
+        type: azure
+        display_name: azure
+        config:
+          instance: acme-foundry
+          auth:
+            type: basic
+            headers:
+              - name: api-key
+                value: !env AZURE_OPENAI_API_KEY
+
+    models:
+      - ref: gpt-5-6
+        ai_gateway: !ref acme-ai-gateway#id
+        name: gpt-5-6
+        display_name: gpt-5-6
+        type: model
+        enabled: true
+        capabilities:
+          - generate
+        formats:
+          - type: openai
+        targets:
+          - name: gpt-5-6
+            provider: azure
+            weight: 100
+            config:
+              type: azure
+              deployment_id: gpt-5.6
+              api_version: 2024-12-01-preview
+        config:
+          model:
+            name_header: true
+          response_streaming: allow
+          route:
+            paths:
+              - /v1/gpt-5-6
+            protocols:
+              - http
+              - https
+            strip_path: true
+
+    policies:
+      - ref: acme-ai-gateway-ai-prompt-guard
+        ai_gateway: !ref acme-ai-gateway#id
+        name: ai-prompt-guard
+        display_name: AI Prompt Guard
+        type: ai-prompt-guard
+        global: true
+        enabled: true
+        config:
+          llm_format: openai
+          continue_on_detection: true
+          rejection_mode: verbose
+          deny_patterns:
+            - '(\xE2\x80[\x8B-\x8D]|\xEF\xBB\xBF)'
+            - '\xE2\x80[\xAA-\xAE]'
+            - '\xE2\x81[\xA0-\xAF]'
+            - '\xF3\xA0\x80[\xA0-\xBF]|\xF3\xA0\x81[\x80-\xBF]'
+            - '(?i).*ignore (all|previous|the above).*(instructions|context|policy).*'
+            - '(?i).*(override|forget) (all|your) (previous )?(instructions|prompt).*'
+            - '(?i).*(system prompt|developer message).*(reveal|show|change|ignore).*'
+            - '(?i)\b(reveal|repeat|print|output|disclose|dump)\b.{0,40}\b(system prompt|system message|initial prompt|developer message|your instructions|(the )?instructions above|everything above)\b|\bwhat (are|were) your (original |initial |system )?(instructions|rules|prompt)\b'
+            - '(?i)\b(ignore|disregard|bypass|circumvent|turn off|disable)\b.{0,30}\b(safety|guardrails?|filters?|restrictions?|guidelines?|content polic\w+)\b|\b(dan mode|do anything now|developer mode enabled|jailbreak mode)\b|\bno longer bound by\b.{0,30}\b(rules|policy|policies|instructions)\b'
+            - '(?i)\b(important|urgent|new|updated)\s+(instructions?|directives?)\s+for\s+(the\s+)?(ai|assistant|llm|language model|agent)\b|\bif\s+you(\S{0,2}re|\s+are)\s+(an?\s+)?(ai|llm|language model|assistant|agent)\b.{0,40}\b(you must|then you|ignore|do not|instead)\b|\b(ai|llm)\s+(assistant|agent)s?\b.{0,20}\breading this\b'
+
+    data_plane_certificates:
+      - ref: acme-ai-gateway-cert
+        ai_gateway: !ref acme-ai-gateway#id
+        title: Cluster Certificate
+        description: Cluster certificate for acme-ai-gateway
+        cert: !file ../.certs/cluster.crt

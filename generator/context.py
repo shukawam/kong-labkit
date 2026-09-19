@@ -13,6 +13,7 @@ from generator.schema import (
     NewRelicSpec,
     ObservabilityBackend,
     ProviderType,
+    PromptGuardMode,
     SecretsBackend,
     UpstreamType,
     VectorDbType,
@@ -131,9 +132,9 @@ class UnknownEmbeddingModelError(Exception):
 
 
 KONG_IMAGES = {
-    Gateway.AI_GATEWAY_V2: "kong/kong-ai-gateway:2.0.1",
-    Gateway.AI_GATEWAY_V1: "kong/kong-gateway:3.14",
-    Gateway.API_GATEWAY: "kong/kong-gateway:3.14",
+    Gateway.AI_GATEWAY_V2: "kong/kong-ai-gateway:2.0.3",
+    Gateway.AI_GATEWAY_V1: "kong/kong-gateway:3.16",
+    Gateway.API_GATEWAY: "kong/kong-gateway:3.16",
 }
 
 LLDAP_IMAGE = "lldap/lldap:v0.6.3-alpine"
@@ -228,6 +229,31 @@ class OtelCtx:
     metrics_push_interval: int = 15
 
 
+# v1 と v2 の両方の設定に同じ一覧を描画する。片側だけ直る形を作らないため 1 箇所に置く
+PROMPT_GUARD_DENY_PATTERNS: tuple[str, ...] = (
+    # 目に見えない文字で deny パターンを迂回されるのを防ぐ。ゼロ幅・双方向制御・タグ文字と BOM
+    r"(\xE2\x80[\x8B-\x8D]|\xEF\xBB\xBF)",
+    r"\xE2\x80[\xAA-\xAE]",
+    r"\xE2\x81[\xA0-\xAF]",
+    r"\xF3\xA0\x80[\xA0-\xBF]|\xF3\xA0\x81[\x80-\xBF]",
+    r"(?i).*ignore (all|previous|the above).*(instructions|context|policy).*",
+    r"(?i).*(override|forget) (all|your) (previous )?(instructions|prompt).*",
+    r"(?i).*(system prompt|developer message).*(reveal|show|change|ignore).*",
+    r"(?i)\b(reveal|repeat|print|output|disclose|dump)\b.{0,40}\b(system prompt|system message|initial prompt|developer message|your instructions|(the )?instructions above|everything above)\b|\bwhat (are|were) your (original |initial |system )?(instructions|rules|prompt)\b",
+    r"(?i)\b(ignore|disregard|bypass|circumvent|turn off|disable)\b.{0,30}\b(safety|guardrails?|filters?|restrictions?|guidelines?|content polic\w+)\b|\b(dan mode|do anything now|developer mode enabled|jailbreak mode)\b|\bno longer bound by\b.{0,30}\b(rules|policy|policies|instructions)\b",
+    r"(?i)\b(important|urgent|new|updated)\s+(instructions?|directives?)\s+for\s+(the\s+)?(ai|assistant|llm|language model|agent)\b|\bif\s+you(\S{0,2}re|\s+are)\s+(an?\s+)?(ai|llm|language model|assistant|agent)\b.{0,40}\b(you must|then you|ignore|do not|instead)\b|\b(ai|llm)\s+(assistant|agent)s?\b.{0,20}\breading this\b",
+)
+
+
+@dataclass(frozen=True)
+class PromptGuardCtx:
+    enabled: bool
+    continue_on_detection: bool
+    rejection_mode: str
+    llm_format: str
+    patterns: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class CacheCtx:
     enabled: bool
@@ -313,6 +339,7 @@ class Ctx:
     vector: VectorCtx
     upstream: UpstreamCtx
     semantic: SemanticCtx
+    prompt_guard: PromptGuardCtx
     certs: CertsCtx
     deck: DeckCtx
     secrets: SecretsCtx
@@ -826,6 +853,19 @@ def _build_semantic(spec: EnvSpec) -> SemanticCtx:
     )
 
 
+def _build_prompt_guard(spec: EnvSpec) -> PromptGuardCtx:
+    mode = spec.ai.prompt_guard
+    return PromptGuardCtx(
+        enabled=mode is not PromptGuardMode.NONE,
+        continue_on_detection=mode is PromptGuardMode.OBSERVE,
+        # none だと検知しても本文に何も出ず、ラボで弾かれた理由を追えない
+        rejection_mode="verbose",
+        # v2 の model は formats: openai で出しているので、検査する形もそれに合わせる
+        llm_format="openai",
+        patterns=PROMPT_GUARD_DENY_PATTERNS,
+    )
+
+
 def build_context(spec: EnvSpec) -> Ctx:
     ports = allocate_ports(spec)
     kong = _build_kong(spec)
@@ -842,6 +882,7 @@ def build_context(spec: EnvSpec) -> Ctx:
         vector=_build_vector(spec),
         upstream=_build_upstream(spec),
         semantic=_build_semantic(spec),
+        prompt_guard=_build_prompt_guard(spec),
         certs=_build_certs(spec, kong),
         deck=deck,
         secrets=_build_secrets(spec, refs),

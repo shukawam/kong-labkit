@@ -30,6 +30,7 @@ def template_vars(ctx: Ctx) -> dict:
         "vector": ctx.vector,
         "upstream": ctx.upstream,
         "semantic": ctx.semantic,
+        "prompt_guard": ctx.prompt_guard,
         "certs": ctx.certs,
         "deck": ctx.deck,
         "secrets": ctx.secrets,

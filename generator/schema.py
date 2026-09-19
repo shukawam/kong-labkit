@@ -71,6 +71,12 @@ class ProviderType(StrEnum):
     ANTHROPIC = "anthropic"
 
 
+class PromptGuardMode(StrEnum):
+    NONE = "none"
+    OBSERVE = "observe"
+    BLOCK = "block"
+
+
 class AuthType(StrEnum):
     API_KEY = "api-key"
     MANAGED_IDENTITY = "managed-identity"
@@ -103,6 +109,7 @@ class AiSpec(Strict):
     semantic_cache: bool = False
     semantic_routing: bool = False
     embedding_model: str = "text-embedding-3-large"
+    prompt_guard: PromptGuardMode = PromptGuardMode.NONE
 
 
 class LdapUser(Strict):
@@ -284,6 +291,32 @@ class EnvSpec(Strict):
                 "（v2 の設定は config/kongctl.yaml の AI Gateway エンティティだけで、"
                 "そこが vault 参照を受け付けるか検証できていません）。"
                 "gateway: ai-gateway-v1 か api-gateway にしてください。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_prompt_guard_needs_an_ai_gateway(self):
+        if self.ai.prompt_guard is not PromptGuardMode.NONE and not self.is_ai:
+            raise ValueError(
+                f"ai.prompt_guard: {self.ai.prompt_guard.value} は "
+                f"gateway: {self.gateway.value} では使えません"
+                "（ai-prompt-guard は LLM リクエストの本文を検査するプラグインで、"
+                "api-gateway の upstream は httpbin か none しか選べず、検査する相手が居ません）。"
+                "gateway: ai-gateway-v1 か ai-gateway-v2 にしてください。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_observe_needs_the_v2_data_plane(self):
+        if (
+            self.ai.prompt_guard is PromptGuardMode.OBSERVE
+            and self.gateway is not Gateway.AI_GATEWAY_V2
+        ):
+            raise ValueError(
+                "ai.prompt_guard: observe は ai-gateway-v2 でだけ使えます"
+                "（検知しても通す continue_on_detection が v1 のデータプレーンの "
+                "ai-prompt-guard に無く、必ずブロックになります）。"
+                "gateway: ai-gateway-v2 にするか、ai.prompt_guard: block にしてください。"
             )
         return self
 

@@ -18,7 +18,7 @@ services:
   kong:
     <<: *default
     container_name: kong
-    image: kong/kong-ai-gateway:2.0.1
+    image: kong/kong-ai-gateway:2.0.3
     ports:
       - 8000:8000
       - 8100:8100

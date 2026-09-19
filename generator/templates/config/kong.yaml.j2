@@ -157,8 +157,9 @@ consumers:
 {% endfor %}
 
 {% endif %}
-{% if otel.enabled %}
+{% if otel.enabled or prompt_guard.enabled %}
 plugins:
+{% if otel.enabled %}
   - name: opentelemetry
     config:
       traces_endpoint: {{ otel.endpoint }}/v1/traces
@@ -176,6 +177,18 @@ plugins:
         enable_ai_metrics: true
       resource_attributes:
         service.name: {{ kong.cp_name }}
+{% endif %}
+{% if prompt_guard.enabled %}
+  # continue_on_detection と rejection_mode は {{ kong.image }} の ai-prompt-guard に無い。
+  # v1 では検知したら必ずブロックになる
+  - name: ai-prompt-guard
+    config:
+      llm_format: {{ prompt_guard.llm_format }}
+      deny_patterns:
+{% for pattern in prompt_guard.patterns %}
+        - '{{ pattern }}'
+{% endfor %}
+{% endif %}
 {% else %}
 plugins: []
 {% endif %}

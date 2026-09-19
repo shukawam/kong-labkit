@@ -17,9 +17,9 @@ AZURE_PROVIDER = {
 
 
 def test_kong_image_by_gateway():
-    assert build_context(spec_from(gateway="ai-gateway-v2")).kong.image == "kong/kong-ai-gateway:2.0.1"
-    assert build_context(spec_from(gateway="ai-gateway-v1")).kong.image == "kong/kong-gateway:3.14"
-    assert build_context(spec_from(gateway="api-gateway")).kong.image == "kong/kong-gateway:3.14"
+    assert build_context(spec_from(gateway="ai-gateway-v2")).kong.image == "kong/kong-ai-gateway:2.0.3"
+    assert build_context(spec_from(gateway="ai-gateway-v1")).kong.image == "kong/kong-gateway:3.16"
+    assert build_context(spec_from(gateway="api-gateway")).kong.image == "kong/kong-gateway:3.16"
 
 
 def test_konnect_domains_use_region():

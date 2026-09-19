@@ -18,7 +18,7 @@ services:
   gateway:
     <<: *default
     container_name: gateway
-    image: kong/kong-gateway:3.14
+    image: kong/kong-gateway:3.16
     ports:
       - 8000:8000
       - 8100:8100

@@ -162,7 +162,7 @@ def test_tracing_only_when_otel_enabled(compose_of):
 def test_konnect_dp_for_api_gateway(compose_of):
     doc = compose_of(only_services(ctx_for(), "kong-dp"))
     svc = doc["services"]["gateway"]
-    assert svc["image"] == "kong/kong-gateway:3.14"
+    assert svc["image"] == "kong/kong-gateway:3.16"
     assert svc["environment"]["KONG_ROLE"] == "data_plane"
     assert svc["environment"]["KONG_KONNECT_MODE"] == "on"
     assert svc["ports"] == ["8000:8000", "8100:8100"]

@@ -12,7 +12,7 @@
 
 ### `idp.type: ldap` が AI Gateway v2 で使えない
 
-`ai-gateway-v2` の生成物は `config/kongctl.yaml` の AI Gateway エンティティだけで、Kong のプラグインを書く経路が generator に無い。そのため `idp.type: ldap` は schema で v2 を弾いている。v2 でも認証を掛けるには、kongctl テンプレートに plugin を出す仕組みを足す必要がある。同じ制約は将来 v2 に `openid-connect` を掛けたくなったときにも出る。
+`ai-gateway-v2` の生成物は `config/kongctl.yaml` の AI Gateway エンティティだけで、Kong のプラグインを書く経路が generator に無い。そのため `idp.type: ldap` は schema で v2 を弾いている。`ai.prompt_guard` の追加で `ai_gateways[].policies` を出す経路自体はできたが、そこに `ldap-auth-advanced` のような Gateway プラグインを載せて Konnect が受けるかは未検証で、`ai-prompt-guard` でしか確かめていない。v2 でも認証を掛けるには、kongctl テンプレートに plugin を出す仕組みを足す必要がある。同じ制約は将来 v2 に `openid-connect` を掛けたくなったときにも出る。
 
 ### `semantic_routing` が AI Gateway v1 で no-op
 
