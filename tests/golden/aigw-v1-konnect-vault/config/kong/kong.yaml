@@ -20,10 +20,11 @@ services:
         config:
           targets:
             - route_type: llm/v1/chat
-              # 既定は false。false のままだと gen_ai.* / kong.gen_ai.* メトリクスが一切出ない
+              # 既定は false。false のままだと gen_ai.* / kong.gen_ai.* メトリクスが一切出ない。
+              # log_payloads はプロンプトと応答本文をそのままスパンとログに載せる。検証環境なので有効
               logging:
                 log_statistics: true
-                log_payloads: false
+                log_payloads: true
               auth:
                 header_name: api-key
                 header_value: '{vault://hcv/kong/ai-azure/header_value}'
@@ -67,7 +68,12 @@ plugins:
   - name: opentelemetry
     config:
       traces_endpoint: http://otel-lgtm:4318/v1/traces
+      # logs_endpoint が運ぶのは Kong 内部のエラーログだけ。
+      # アクセスログはプラグイン内の別エクスポータで、これを設定しないと出ない。
+      # 平坦な access_logs_endpoint は非推奨なのでレコード側に書く
       logs_endpoint: http://otel-lgtm:4318/v1/logs
+      access_logs:
+        endpoint: http://otel-lgtm:4318/v1/logs
       # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
       # Prometheus プラグインは使わない
       metrics:

@@ -21,7 +21,8 @@ kong:
     KONG_KONNECT_MODE: "on"
     KONG_CLUSTER_DP_LABELS: {{ kong.dp_labels }}
     KONG_STATUS_LISTEN: 0.0.0.0:8100
-    KONG_LOG_LEVEL: debug
+    # debug は telemetry keepalive を毎秒吐き、クラスタリングの実エラーが埋もれる
+    KONG_LOG_LEVEL: info
     KONG_PROXY_ACCESS_LOG: /dev/stdout
     KONG_PROXY_ERROR_LOG: /dev/stderr
 {% if otel.enabled %}

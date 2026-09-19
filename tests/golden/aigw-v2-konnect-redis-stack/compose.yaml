@@ -38,7 +38,8 @@ services:
       KONG_KONNECT_MODE: "on"
       KONG_CLUSTER_DP_LABELS: type:docker-macOsArmOS
       KONG_STATUS_LISTEN: 0.0.0.0:8100
-      KONG_LOG_LEVEL: debug
+      # debug は telemetry keepalive を毎秒吐き、クラスタリングの実エラーが埋もれる
+      KONG_LOG_LEVEL: info
       KONG_PROXY_ACCESS_LOG: /dev/stdout
       KONG_PROXY_ERROR_LOG: /dev/stderr
       KONG_TRACING_INSTRUMENTATIONS: all
@@ -70,6 +71,10 @@ services:
       - 3000:3000
       - 4317:4317
       - 4318:4318
+    # Kong のアクセスログ 1 件が構造化メタデータ 156 個を持ち、Loki の既定上限 128 を超えて
+    # 400 になる。OTLP は全か無かなので、そのバッチに同梱された内部ログまで丸ごと捨てられる
+    environment:
+      LOKI_EXTRA_ARGS: -limits.max-structured-metadata-entries-count=256
     # provisioning ディレクトリごと差し替えると同梱の RED metrics ダッシュボードが消えるので、
     # プロバイダ定義とダッシュボード置き場だけを足す。置き場が conf/provisioning の外にあると
     # Grafana の permitted_provisioning_paths に弾かれる

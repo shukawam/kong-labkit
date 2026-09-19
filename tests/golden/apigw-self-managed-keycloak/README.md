@@ -67,4 +67,6 @@ Grafana の `Kong` フォルダに、`config/grafana/dashboards/` の定義が p
 
 **Grafana にメトリクスが 1 つも出ない。** `opentelemetry` プラグインは「その値が最後に更新された時刻」を datapoint のタイムスタンプに使います。起動時に一度だけ立つゲージ（`kong.cp.connection.status` など）は時間とともに古くなり、Prometheus に `too old sample` で弾かれます。OTLP は 1 点でも弾かれるとリクエスト全体が 400 になるため、Kong のメトリクスが丸ごと落ちます。`config/otel-lgtm/otelcol-config.yaml` の `transform/kong` プロセッサが送信時刻で上書きしてこれを避けているので、このマウントを外さないでください。`docker compose logs otel-lgtm | grep "Exporting failed"` で確認できます。
 
+**Loki にログが出ない、または飛び飛びになる。** Kong のアクセスログは 1 件で構造化メタデータを 150 個以上持ちます（`gen_ai.*` と全リクエスト/レスポンスヘッダ）。Loki の既定上限は 128 で、超えると `has too many structured metadata labels` で 400 を返します。OTLP は全か無かなので、そのバッチに同梱された内部ログまで丸ごと捨てられ、ログが飛び飛びに見えます。compose の `LOKI_EXTRA_ARGS` で上限を上げてあるので、この環境変数を外さないでください。`docker compose logs otel-lgtm | grep "Exporting failed"` で確認できますが、otel-lgtm は既定で各コンポーネントのログを捨てるため、`ENABLE_LOGS_ALL=true` を付けて起動する必要があります。
+
 **ダッシュボードが Grafana に現れない。** `config/grafana/dashboards.yaml` の `path` は `conf/provisioning` の下を指す必要があります。Grafana の `permitted_provisioning_paths` がそれ以外を拒否します。

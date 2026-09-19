@@ -92,9 +92,10 @@ description = "主要経路を叩いて疎通を確認する"
 run = '''
 set -e
 curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8100/status
+# model は省けない。無いと AI Gateway が target を選べず ai-gateway.upstream.local の DNS 解決で 500 になる
 curl -sS -f -X POST http://localhost:8000/v1/gpt-5-6/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"messages":[{"role":"user","content":"ping"}]}' > /dev/null
+  -d '{"model":"gpt-5-6","messages":[{"role":"user","content":"ping"}]}' > /dev/null
 echo "smoke: OK"
 '''
 

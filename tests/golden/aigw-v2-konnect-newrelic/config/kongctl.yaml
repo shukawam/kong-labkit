@@ -45,6 +45,10 @@ ai_gateways:
           model:
             name_header: true
           response_streaming: allow
+          # v1 の log_payloads に相当。v2 でのフィールド名は payloads で、log_payloads は弾かれる。
+          # プロンプトと応答本文をそのままスパンに載せるので、検証環境だけの設定
+          logging:
+            payloads: true
           route:
             paths:
               - /v1/gpt-5-6
@@ -52,6 +56,36 @@ ai_gateways:
               - http
               - https
             strip_path: true
+
+    policies:
+      - ref: acme-ai-gateway-opentelemetry
+        ai_gateway: !ref acme-ai-gateway#id
+        name: opentelemetry
+        display_name: OpenTelemetry
+        type: opentelemetry
+        global: true
+        enabled: true
+        config:
+          traces_endpoint: http://otel-collector:4318/v1/traces
+          # logs_endpoint が運ぶのは Kong 内部のエラーログだけ。
+          # アクセスログはプラグイン内の別エクスポータで、これを設定しないと出ない。
+          # 平坦な access_logs_endpoint は非推奨なのでレコード側に書く
+          logs_endpoint: http://otel-collector:4318/v1/logs
+          access_logs:
+            endpoint: http://otel-collector:4318/v1/logs
+          # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
+          # Prometheus プラグインは使わない
+          metrics:
+            endpoint: http://otel-collector:4318/v1/metrics
+            push_interval: 15
+            enable_request_metrics: true
+            enable_latency_metrics: true
+            enable_bandwidth_metrics: true
+            enable_upstream_health_metrics: true
+            enable_consumer_attribute: true
+            enable_ai_metrics: true
+          resource_attributes:
+            service.name: acme-ai-gateway
 
     data_plane_certificates:
       - ref: acme-ai-gateway-cert

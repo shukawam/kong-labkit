@@ -91,6 +91,10 @@ services:
       - 3000:3000
       - 4317:4317
       - 4318:4318
+    # Kong のアクセスログ 1 件が構造化メタデータ 156 個を持ち、Loki の既定上限 128 を超えて
+    # 400 になる。OTLP は全か無かなので、そのバッチに同梱された内部ログまで丸ごと捨てられる
+    environment:
+      LOKI_EXTRA_ARGS: -limits.max-structured-metadata-entries-count=256
     # provisioning ディレクトリごと差し替えると同梱の RED metrics ダッシュボードが消えるので、
     # プロバイダ定義とダッシュボード置き場だけを足す。置き場が conf/provisioning の外にあると
     # Grafana の permitted_provisioning_paths に弾かれる

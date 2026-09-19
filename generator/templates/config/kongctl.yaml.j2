@@ -95,6 +95,10 @@ ai_gateways:
           model:
             name_header: true
           response_streaming: allow
+          # v1 の log_payloads に相当。v2 でのフィールド名は payloads で、log_payloads は弾かれる。
+          # プロンプトと応答本文をそのままスパンに載せるので、検証環境だけの設定
+          logging:
+            payloads: true
 {% if semantic.enabled %}
           balancer:
             algorithm: semantic
@@ -126,9 +130,10 @@ ai_gateways:
             strip_path: true
 {% endfor %}
 {% endfor %}
-{% if prompt_guard.enabled %}
+{% if prompt_guard.enabled or otel.enabled %}
 
     policies:
+{% if prompt_guard.enabled %}
       - ref: {{ kong.cp_name }}-ai-prompt-guard
         ai_gateway: !ref {{ kong.cp_name }}#id
         name: ai-prompt-guard
@@ -144,6 +149,37 @@ ai_gateways:
 {% for pattern in prompt_guard.patterns %}
             - '{{ pattern }}'
 {% endfor %}
+{% endif %}
+{% if otel.enabled %}
+      - ref: {{ kong.cp_name }}-opentelemetry
+        ai_gateway: !ref {{ kong.cp_name }}#id
+        name: opentelemetry
+        display_name: OpenTelemetry
+        type: opentelemetry
+        global: true
+        enabled: true
+        config:
+          traces_endpoint: {{ otel.endpoint }}/v1/traces
+          # logs_endpoint が運ぶのは Kong 内部のエラーログだけ。
+          # アクセスログはプラグイン内の別エクスポータで、これを設定しないと出ない。
+          # 平坦な access_logs_endpoint は非推奨なのでレコード側に書く
+          logs_endpoint: {{ otel.endpoint }}/v1/logs
+          access_logs:
+            endpoint: {{ otel.endpoint }}/v1/logs
+          # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
+          # Prometheus プラグインは使わない
+          metrics:
+            endpoint: {{ otel.endpoint }}/v1/metrics
+            push_interval: {{ otel.metrics_push_interval }}
+            enable_request_metrics: true
+            enable_latency_metrics: true
+            enable_bandwidth_metrics: true
+            enable_upstream_health_metrics: true
+            enable_consumer_attribute: true
+            enable_ai_metrics: true
+          resource_attributes:
+            service.name: {{ kong.cp_name }}
+{% endif %}
 {% endif %}
 
     data_plane_certificates:

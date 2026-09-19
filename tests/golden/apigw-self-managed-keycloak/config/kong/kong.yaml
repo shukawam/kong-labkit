@@ -30,7 +30,12 @@ plugins:
   - name: opentelemetry
     config:
       traces_endpoint: http://otel-lgtm:4318/v1/traces
+      # logs_endpoint が運ぶのは Kong 内部のエラーログだけ。
+      # アクセスログはプラグイン内の別エクスポータで、これを設定しないと出ない。
+      # 平坦な access_logs_endpoint は非推奨なのでレコード側に書く
       logs_endpoint: http://otel-lgtm:4318/v1/logs
+      access_logs:
+        endpoint: http://otel-lgtm:4318/v1/logs
       # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
       # Prometheus プラグインは使わない
       metrics:
