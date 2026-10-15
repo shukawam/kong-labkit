@@ -101,47 +101,54 @@ def _literal_path(value: str) -> str:
 
 
 def _upstream_url(value: str) -> str:
-    # Parse only: no DNS lookup or HTTP request. Never include rejected input in errors.
-    message = "upstream.url は非秘密の HTTP(S) URL と到達可能な host を指定してください"
+    # Parse only: no DNS lookup or HTTP request. Reasons never include the rejected input.
+    def reject(reason: str):
+        return ValueError(reason)
+
+    if any(ord(c) <= 32 or ord(c) >= 127 for c in value):
+        raise reject("空白・制御文字・非 ASCII 文字は使えません")
+    if any(c in value for c in ("@", "?", "#", "%", "\\", "$", "{", "}")):
+        raise reject("userinfo・query・fragment・percent-encoding・シェル展開文字は使えません")
+    parts = urlsplit(value)
+    if parts.scheme not in ("http", "https"):
+        raise reject("scheme は http / https のみ指定できます")
+    if not parts.netloc or not parts.hostname:
+        raise reject("host が空です")
+    host = parts.hostname
+    authority = (r"\[[0-9A-Fa-f:.]+\](?::[0-9]+)?" if ":" in host
+                 else r"[A-Za-z0-9.-]+(?::[0-9]+)?")
+    if not re.fullmatch(authority, parts.netloc) or parts.netloc.endswith(":"):
+        raise reject("host[:port] の形式が不正です")
     try:
-        if any(ord(c) <= 32 or ord(c) >= 127 for c in value):
-            raise ValueError
-        if any(c in value for c in ("@", "?", "#", "%", "\\", "$", "{", "}")):
-            raise ValueError
-        parts = urlsplit(value)
-        if parts.scheme not in ("http", "https") or not parts.netloc or not parts.hostname:
-            raise ValueError
-        host = parts.hostname
-        authority = (r"\[[0-9A-Fa-f:.]+\](?::[0-9]+)?" if ":" in host
-                     else r"[A-Za-z0-9.-]+(?::[0-9]+)?")
-        if not re.fullmatch(authority, parts.netloc):
-            raise ValueError
-        if parts.netloc.endswith(":") or (parts.port is not None and not 1 <= parts.port <= 65535):
-            raise ValueError
-        try:
-            address = ipaddress.ip_address(host)
-        except ValueError:
-            dns = host.removesuffix(".")
-            if (
-                len(dns) > 253
-                or dns.lower() == "localhost"
-                or dns.lower().endswith(".localhost")
-                # Reject legacy inet_aton decimal/octal/hex forms, not just dotted IPv4.
-                or all(re.fullmatch(r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)", label)
-                       for label in dns.split("."))
-                or not all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
-                           for label in dns.split("."))
-            ):
-                raise ValueError
-        else:
-            if address.is_loopback or (isinstance(address, ipaddress.IPv6Address)
-                                       and address.ipv4_mapped and address.ipv4_mapped.is_loopback):
-                raise ValueError
-        if parts.path:
-            _literal_path(parts.path)
-        return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+        port = parts.port
     except ValueError:
-        raise ValueError(message) from None
+        raise reject("port は 1〜65535 の整数にしてください") from None
+    if port is not None and not 1 <= port <= 65535:
+        raise reject("port は 1〜65535 の整数にしてください")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        dns = host.removesuffix(".")
+        if dns.lower() == "localhost" or dns.lower().endswith(".localhost"):
+            raise reject("localhost は DP 自身を指すため指定できません") from None
+        # Reject legacy inet_aton decimal/octal/hex forms, not just dotted IPv4.
+        if all(re.fullmatch(r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)", label) for label in dns.split(".")):
+            raise reject("数値のみの host は dotted-quad IPv4 で指定してください") from None
+        if len(dns) > 253 or not all(
+            re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+            for label in dns.split(".")
+        ):
+            raise reject("host は RFC 1123 のホスト名にしてください") from None
+    else:
+        if address.is_loopback or (isinstance(address, ipaddress.IPv6Address)
+                                   and address.ipv4_mapped and address.ipv4_mapped.is_loopback):
+            raise reject("loopback アドレスは DP 自身を指すため指定できません")
+    if parts.path:
+        try:
+            _literal_path(parts.path)
+        except ValueError as e:
+            raise reject(str(e)) from None
+    return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
 
 
 class UpstreamSmokeSpec(Strict):
@@ -275,9 +282,19 @@ class EnvSpec(Strict):
         if isinstance(value, dict):
             try:
                 return CustomUpstreamSpec.model_validate(value)
-            except ValidationError:
-                # Collapse union errors, including extra-key locations, without echoing input.
-                raise ValueError("upstream mapping が不正です。URL・path・型・未知キーを確認してください") from None
+            except ValidationError as e:
+                # Re-raise as ValueError so the union does not append its own branch errors.
+                # loc of extra_forbidden is the user-typed key itself, so it is never echoed.
+                reasons = []
+                for err in e.errors(include_input=False, include_context=False, include_url=False):
+                    if err["type"] == "extra_forbidden":
+                        parent = ".".join(str(p) for p in err["loc"][:-1])
+                        reasons.append(f"{parent or 'upstream'} に未知のキーがあります")
+                        continue
+                    loc = ".".join(str(p) for p in err["loc"])
+                    msg = err["msg"].removeprefix("Value error, ")
+                    reasons.append(f"{loc}: {msg}" if loc and not msg.startswith(loc) else msg)
+                raise ValueError("upstream mapping が不正です: " + "; ".join(reasons)) from None
         return value
 
     @model_validator(mode="after")
