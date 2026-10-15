@@ -1,8 +1,11 @@
+import ipaddress
+import re
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 class Target(StrEnum):
@@ -84,7 +87,102 @@ class AuthType(StrEnum):
 
 class Strict(BaseModel):
     # 未知のキーを黙って捨てると、綴り間違いが「設定したのに効かない」として表れる
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+
+def _literal_path(value: str) -> str:
+    if (
+        not re.fullmatch(r"/[A-Za-z0-9._~/-]*", value)
+        or "//" in value
+        or any(part in (".", "..") for part in value.split("/"))
+    ):
+        raise ValueError("path は dot segment のない literal ASCII 絶対 path にしてください")
+    return value
+
+
+def _upstream_url(value: str) -> str:
+    # Parse only: no DNS lookup or HTTP request. Never include rejected input in errors.
+    message = "upstream.url は非秘密の HTTP(S) URL と到達可能な host を指定してください"
+    try:
+        if any(ord(c) <= 32 or ord(c) >= 127 for c in value):
+            raise ValueError
+        if any(c in value for c in ("@", "?", "#", "%", "\\", "$", "{", "}")):
+            raise ValueError
+        parts = urlsplit(value)
+        if parts.scheme not in ("http", "https") or not parts.netloc or not parts.hostname:
+            raise ValueError
+        host = parts.hostname
+        authority = (r"\[[0-9A-Fa-f:.]+\](?::[0-9]+)?" if ":" in host
+                     else r"[A-Za-z0-9.-]+(?::[0-9]+)?")
+        if not re.fullmatch(authority, parts.netloc):
+            raise ValueError
+        if parts.netloc.endswith(":") or (parts.port is not None and not 1 <= parts.port <= 65535):
+            raise ValueError
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            dns = host.removesuffix(".")
+            if (
+                len(dns) > 253
+                or dns.lower() == "localhost"
+                or dns.lower().endswith(".localhost")
+                # Reject legacy inet_aton decimal/octal/hex forms, not just dotted IPv4.
+                or all(re.fullmatch(r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)", label)
+                       for label in dns.split("."))
+                or not all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                           for label in dns.split("."))
+            ):
+                raise ValueError
+        else:
+            if address.is_loopback or (isinstance(address, ipaddress.IPv6Address)
+                                       and address.ipv4_mapped and address.ipv4_mapped.is_loopback):
+                raise ValueError
+        if parts.path:
+            _literal_path(parts.path)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), "", ""))
+    except ValueError:
+        raise ValueError(message) from None
+
+
+class UpstreamSmokeSpec(Strict):
+    # Empty internal sentinel is used only for omission; explicit empty/null input is rejected.
+    path: str = Field(default_factory=lambda: "", strict=True, description="省略時は route_path")
+    expected_status: int = Field(default=200, strict=True, ge=200, le=299)
+
+    @field_validator("path")
+    @classmethod
+    def _check_path(cls, value):
+        return _literal_path(value)
+
+
+class CustomUpstreamSpec(Strict):
+    url: str = Field(strict=True)
+    route_path: str = Field(default="/upstream", strict=True)
+    strip_path: bool = Field(default=True, strict=True)
+    smoke: UpstreamSmokeSpec = Field(default_factory=UpstreamSmokeSpec)
+
+    @field_validator("url")
+    @classmethod
+    def _check_url(cls, value):
+        return _upstream_url(value)
+
+    @field_validator("route_path")
+    @classmethod
+    def _check_route_path(cls, value):
+        _literal_path(value)
+        if value != "/" and value.endswith("/"):
+            raise ValueError("route_path の末尾 slash は root 以外では指定できません")
+        return value
+
+    @model_validator(mode="after")
+    def _resolve_smoke(self):
+        if self.smoke.path == "":
+            self.smoke.path = self.route_path
+        if self.route_path != "/" and not (
+            self.smoke.path == self.route_path or self.smoke.path.startswith(self.route_path + "/")
+        ):
+            raise ValueError("smoke.path は route_path またはその配下にしてください")
+        return self
 
 
 class Model(Strict):
@@ -169,7 +267,29 @@ class EnvSpec(Strict):
     vectordb: VectorDbSpec = Field(default_factory=VectorDbSpec)
     observability: ObservabilitySpec = Field(default_factory=ObservabilitySpec)
     secrets: SecretsSpec = Field(default_factory=SecretsSpec)
-    upstream: UpstreamType | None = None
+    upstream: UpstreamType | CustomUpstreamSpec | None = None
+
+    @field_validator("upstream", mode="before")
+    @classmethod
+    def _parse_custom_upstream(cls, value):
+        if isinstance(value, dict):
+            try:
+                return CustomUpstreamSpec.model_validate(value)
+            except ValidationError:
+                # Collapse union errors, including extra-key locations, without echoing input.
+                raise ValueError("upstream mapping が不正です。URL・path・型・未知キーを確認してください") from None
+        return value
+
+    @model_validator(mode="after")
+    def _check_custom_scope(self):
+        if isinstance(self.upstream, CustomUpstreamSpec) and not (
+            self.target is Target.COMPOSE
+            and self.gateway is Gateway.API_GATEWAY
+            and self.control_plane is ControlPlane.SELF_MANAGED
+            and self.idp.type is IdpType.NONE
+        ):
+            raise ValueError("custom upstream は compose / api-gateway / self-managed / idp:none のみ対応しています")
+        return self
 
     @property
     def is_ai(self) -> bool:
@@ -301,7 +421,7 @@ class EnvSpec(Strict):
                 f"ai.prompt_guard: {self.ai.prompt_guard.value} は "
                 f"gateway: {self.gateway.value} では使えません"
                 "（ai-prompt-guard は LLM リクエストの本文を検査するプラグインで、"
-                "api-gateway の upstream は httpbin か none しか選べず、検査する相手が居ません）。"
+                "api-gateway の upstream は LLM ではなく、検査する相手が居ません）。"
                 "gateway: ai-gateway-v1 か ai-gateway-v2 にしてください。"
             )
         return self
@@ -349,5 +469,10 @@ class EnvSpec(Strict):
 
 
 def load_spec(path: Path) -> EnvSpec:
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    try:
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        mark = getattr(error, "problem_mark", None)
+        position = f" (line {mark.line + 1}, column {mark.column + 1})" if mark else ""
+        raise ValueError("YAML 構文が不正です" + position) from None
     return EnvSpec.model_validate(data)

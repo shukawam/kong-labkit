@@ -75,7 +75,33 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 | `observability.backend` | `otel-lgtm` / `newrelic` / `none` | `otel-lgtm` | `newrelic` は素の OTel Collector を同梱し、Grafana とダッシュボードは生成しない |
 | `observability.newrelic.region` | `us` / `eu` | `us` | `backend: newrelic` のときだけ指定できる |
 | `secrets.backend` | `env` / `vault` | `env` | `vault` は Vault を同梱し、kong.yaml の秘密を `{vault://hcv/...}` 参照にする。`ai-gateway-v2` とは併用不可 |
-| `upstream` | `httpbin` / `none` | `api-gateway` なら `httpbin` | |
+| `upstream` | `httpbin` / `none` / URL mapping | `api-gateway` なら `httpbin` | |
+
+## 外部 API を upstream にする
+
+`examples/apigw-self-managed-custom-upstream.yaml` は、利用者が別管理する API へ接続する例です。`compose` × `api-gateway` × `self-managed` × `idp.type: none` のみ対応します。Konnect、AI Gateway、IdP 付き custom は生成前に拒否します。既存の `httpbin` / `none` / 未指定 / `null` の動作は変わりません。
+
+```yaml
+upstream:
+  url: http://fixture-api:8080/v1
+  route_path: /api
+  strip_path: true
+  smoke:
+    path: /api/products
+    expected_status: 200
+```
+
+| field | 既定・制限 |
+|---|---|
+| `url` | 必須。非秘密の HTTP(S) base URL。DP から到達できる DNS/IP と port 1–65535 |
+| `route_path` | `/upstream`。単一 literal prefix。末尾 slash は `/` 以外禁止 |
+| `strip_path` | `true`。厳格な真偽値 |
+| `smoke.path` | `route_path`。Gateway 用の絶対 path。Route prefix 自身または `/` 配下 |
+| `smoke.expected_status` | `200`。厳格な整数 200–299。完全一致で成功 |
+
+未知キーは拒否します。URL base path の末尾 slash は除去します。base/Route/smoke path は英数字と `-._~/` の ASCII literal に限定し、dot segment、二重 slash、percent escape、backslash は拒否します。userinfo・query・fragment（空指定も含む）、空白、env/shell 補間、localhost/loopback は非対応です。秘密値を path や host にも含めないでください。有効な URL は入力コピーと生成設定に残ります。秘密の完全検出や SSRF 防御を保証しません。
+
+Service/Route は各 1 個、固定名 `upstream`、`path_handling: v0` で生成します。外部 API の container/image/port は生成しません。API owner が起動・DNS・network・TLS 条件を管理し、**DP 側の到達**を用意してください。host/browser からの成功だけでは DP の疎通を証明できません。生成 README に setup・smoke・再生成・停止／除去の手順を記載します。追加 optional 機能は既存 validator に従いますが、全組み合わせの実 HTTP 動作を保証するものではありません。
 
 ## 弾かれる組み合わせ
 
@@ -91,7 +117,7 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 
 `ai.prompt_guard: observe` は `ai-gateway-v2` でしか使えません。検知しても通す `continue_on_detection` が `kong-gateway:3.16` の `ai-prompt-guard` に存在せず、v1 では必ずブロックになるためです。v1 で掛けたいときは `block` を指定してください。
 
-`ai.prompt_guard` は `api-gateway` では使えません。`ai-prompt-guard` は LLM リクエストの本文を検査するプラグインですが、`api-gateway` の `upstream` は `httpbin` か `none` しか選べず、検査する相手が居ません。
+`ai.prompt_guard` は `api-gateway` では使えません。`ai-prompt-guard` は LLM リクエストの本文を検査するプラグインですが、`api-gateway` の upstream は LLM ではなく、検査する相手が居ません。
 
 ## テスト
 

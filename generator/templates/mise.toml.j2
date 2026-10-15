@@ -131,7 +131,23 @@ run = 'docker compose logs -f {% raw %}{{arg(name="service", default="")}}{% end
 description = "主要経路を叩いて疎通を確認する"
 run = '''
 set -e
-{% if spec.gateway.value == 'ai-gateway-v2' %}
+{% if upstream.custom %}
+# No redirects, response bodies, or curl diagnostics (which can contain URLs).
+if ! code=$(curl --disable --silent --request GET --connect-timeout 5 --max-time 15 --max-redirs 0 \
+  --output /dev/null --write-out '%{http_code}' \
+  'http://localhost:{{ ports.proxy }}{{ upstream.smoke_path }}' 2>/dev/null); then
+  echo "smoke: upstream request transport failure" >&2
+  exit 1
+fi
+case "$code" in
+  [0-9][0-9][0-9]) ;;
+  *) echo "smoke: invalid HTTP status" >&2; exit 1 ;;
+esac
+if [ "$code" != "{{ upstream.expected_status }}" ]; then
+  echo "smoke: upstream returned HTTP $code (expected {{ upstream.expected_status }})" >&2
+  exit 1
+fi
+{% elif spec.gateway.value == 'ai-gateway-v2' %}
 curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:{{ ports.status }}/status
 {% for provider in spec.ai.providers %}
 {% for model in provider.models %}

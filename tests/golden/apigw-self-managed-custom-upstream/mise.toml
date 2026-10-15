@@ -1,0 +1,99 @@
+[tasks.up]
+description = "環境を起動する"
+run = '''
+set -euo pipefail
+docker compose up -d
+'''
+
+[tasks.down]
+description = "環境を停止する"
+run = "docker compose down"
+
+[tasks.reset]
+description = "ボリュームごと作り直す"
+run = """
+docker compose down -v
+docker compose up -d
+"""
+
+[tasks.certs]
+description = "クラスタ証明書を再生成する"
+run = '''
+mkdir -p config/kong/certs
+openssl req -new -x509 -nodes -newkey rsa:2048 \
+  -subj "/CN=kong_clustering/C=JP" \
+  -addext "subjectAltName=DNS:kong_clustering" \
+  -keyout config/kong/certs/tls.key -out config/kong/certs/tls.crt -days 1095
+chmod 600 config/kong/certs/tls.key
+'''
+
+[tasks.setup]
+description = "証明書の用意から環境の起動までを通しで行う"
+run = '''
+set -euo pipefail
+
+
+
+if [ ! -f config/kong/certs/tls.crt ]; then
+  mise run certs
+fi
+
+docker compose up -d
+
+# ローカルの Control Plane は Admin API が開くまで sync を受け付けない
+for _ in $(seq 1 60); do
+  if curl -sS -o /dev/null http://localhost:8001/status; then
+    break
+  fi
+  sleep 2
+done
+
+deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:8001
+
+echo "起動しました。mise run smoke で疎通を確認してください。"
+'''
+
+[tasks.sync]
+description = "宣言的設定を適用する"
+run = '''
+set -euo pipefail
+
+deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:8001
+'''
+
+[tasks.diff]
+description = "宣言的設定の差分を見る"
+run = '''
+set -euo pipefail
+
+deck gateway diff config/kong/kong.yaml --kong-addr http://localhost:8001
+'''
+
+[tasks.logs]
+description = "ログを追う。サービス名を引数で渡せる"
+run = 'docker compose logs -f {{arg(name="service", default="")}}'
+
+[tasks.smoke]
+description = "主要経路を叩いて疎通を確認する"
+run = '''
+set -e
+# No redirects, response bodies, or curl diagnostics (which can contain URLs).
+if ! code=$(curl --disable --silent --request GET --connect-timeout 5 --max-time 15 --max-redirs 0 \
+  --output /dev/null --write-out '%{http_code}' \
+  'http://localhost:8000/api/products' 2>/dev/null); then
+  echo "smoke: upstream request transport failure" >&2
+  exit 1
+fi
+case "$code" in
+  [0-9][0-9][0-9]) ;;
+  *) echo "smoke: invalid HTTP status" >&2; exit 1 ;;
+esac
+if [ "$code" != "200" ]; then
+  echo "smoke: upstream returned HTTP $code (expected 200)" >&2
+  exit 1
+fi
+echo "smoke: OK"
+'''
+
+[env]
+mise.file = ".env"

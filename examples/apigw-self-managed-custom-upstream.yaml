@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=../schemas/env.schema.json
+customer: upstream-fixture
+target: compose
+gateway: api-gateway
+control_plane: self-managed
+observability:
+  backend: none
+upstream:
+  url: http://fixture-api:8080/v1
+  route_path: /api
+  strip_path: true
+  smoke:
+    path: /api/products
+    expected_status: 200

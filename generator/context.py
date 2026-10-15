@@ -5,6 +5,7 @@ from generator.schema import (
     AuthType,
     CacheType,
     ControlPlane,
+    CustomUpstreamSpec,
     EnvSpec,
     Gateway,
     IdpType,
@@ -327,6 +328,12 @@ class UpstreamCtx:
     enabled: bool
     service_name: str | None
     url: str | None
+    custom: bool = False
+    managed_service_name: str | None = None
+    route_path: str | None = None
+    strip_path: bool = True
+    smoke_path: str | None = None
+    expected_status: int = 200
 
 
 @dataclass(frozen=True)
@@ -342,7 +349,7 @@ class Ctx:
     prompt_guard: PromptGuardCtx
     certs: CertsCtx
     deck: DeckCtx
-    secrets: SecretsCtx
+    secrets: "SecretsCtx"
     ports: dict[str, int]
     services: list[str]
     env_vars: dict[str, str]
@@ -676,7 +683,14 @@ def _build_vector(spec: EnvSpec) -> VectorCtx:
 
 def _build_upstream(spec: EnvSpec) -> UpstreamCtx:
     if spec.upstream is UpstreamType.HTTPBIN:
-        return UpstreamCtx(enabled=True, service_name="httpbin", url="http://httpbin:80")
+        return UpstreamCtx(enabled=True, service_name="httpbin", url="http://httpbin:80",
+                           managed_service_name="httpbin")
+    if isinstance(spec.upstream, CustomUpstreamSpec):
+        upstream = spec.upstream
+        return UpstreamCtx(enabled=True, service_name="upstream", url=upstream.url,
+                           custom=True, route_path=upstream.route_path,
+                           strip_path=upstream.strip_path, smoke_path=upstream.smoke.path,
+                           expected_status=upstream.smoke.expected_status)
     return UpstreamCtx(enabled=False, service_name=None, url=None)
 
 

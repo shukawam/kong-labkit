@@ -65,6 +65,16 @@ def _valid_specs():
 
 
 VALID_SPECS = _valid_specs()
+CUSTOM_SPECS = []
+for data in _candidates():
+    if (data["gateway"] == "api-gateway" and data["control_plane"] == "self-managed"
+            and data["idp"]["type"] == "none"):
+        data["upstream"] = {"url": "http://fixture-api:8080/v1"}
+        try:
+            CUSTOM_SPECS.append(EnvSpec.model_validate(data))
+        except ValidationError:
+            pass  # Existing optional-feature rules still apply.
+VALID_SPECS += CUSTOM_SPECS
 
 
 def _spec_id(spec: EnvSpec) -> str:
@@ -76,6 +86,7 @@ def _spec_id(spec: EnvSpec) -> str:
             spec.cache.type.value,
             spec.vectordb.type.value,
             spec.secrets.backend.value,
+            "custom" if isinstance(spec.upstream, dict) or hasattr(spec.upstream, "url") else str(spec.upstream),
         ]
     )
 
@@ -127,8 +138,13 @@ def test_every_compose_service_name_matches_wiring(spec):
         assert ctx.vector.host in services
     if ctx.idp.service_name:
         assert ctx.idp.service_name in services
-    if ctx.upstream.enabled:
-        assert ctx.upstream.service_name in services
+    if ctx.upstream.managed_service_name:
+        assert ctx.upstream.managed_service_name in services
+    elif ctx.upstream.custom:
+        assert ctx.upstream.enabled
+        assert ctx.upstream.service_name not in services
+        assert "httpbin" not in services
+        assert "httpbin" not in ctx.ports
 
 
 @pytest.mark.parametrize("spec", VALID_SPECS, ids=_spec_id)
