@@ -349,7 +349,7 @@ class Ctx:
     prompt_guard: PromptGuardCtx
     certs: CertsCtx
     deck: DeckCtx
-    secrets: SecretsCtx
+    secrets: "SecretsCtx"
     ports: dict[str, int]
     services: list[str]
     env_vars: dict[str, str]
