@@ -113,8 +113,11 @@ def main(env_yaml: Path, out: Path, force: bool) -> None:
     try:
         spec = load_spec(env_yaml)
     except ValidationError as e:
-        for error in e.errors():
+        for error in e.errors(include_input=False, include_context=False):
             click.echo(click.style(str(error["msg"]).removeprefix("Value error, "), fg="red"), err=False)
+        sys.exit(1)
+    except ValueError as e:
+        click.echo(click.style(str(e), fg="red"))
         sys.exit(1)
 
     for warning in spec.warnings():

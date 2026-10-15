@@ -132,6 +132,18 @@ services: []
 {% if idp.enabled %}
 {{ auth_plugin() -}}
 {% endif %}
+{% elif upstream.custom %}
+  - name: upstream
+    url: {{ upstream.url | tojson }}
+    routes:
+      - name: upstream
+        paths:
+          - {{ upstream.route_path | tojson }}
+        strip_path: {{ 'true' if upstream.strip_path else 'false' }}
+        path_handling: v0
+        protocols:
+          - http
+          - https
 {% elif upstream.enabled %}
   - name: {{ upstream.service_name }}
     url: {{ upstream.url }}

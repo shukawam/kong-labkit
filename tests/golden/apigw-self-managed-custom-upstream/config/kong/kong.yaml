@@ -1,0 +1,16 @@
+_format_version: "3.0"
+
+services:
+  - name: upstream
+    url: "http://fixture-api:8080/v1"
+    routes:
+      - name: upstream
+        paths:
+          - "/api"
+        strip_path: true
+        path_handling: v0
+        protocols:
+          - http
+          - https
+
+plugins: []
