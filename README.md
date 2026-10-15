@@ -17,7 +17,7 @@ cd ~/customer/acme
 # README.md の初手に従う
 ```
 
-`mise run generate acme` は `uv run generator/gen.py customer/acme.yaml -o ~/customer/acme` を実行します。たとえば `mise run generate aozora-bank` は `customer/aozora-bank.yaml` を読み、`~/customer/aozora-bank` に出力します。これらのコマンドは kong-labkit プロジェクト内で実行してください。
+`mise run generate acme` は `uv run generator/gen.py customer/acme.yaml -o ~/customer/acme` を実行します。これらのコマンドは kong-labkit プロジェクト内で実行してください。
 
 ```bash
 mise run generate acme --out ~/customer/acme-test  # 出力先を変更
