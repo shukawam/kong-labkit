@@ -81,6 +81,48 @@ def test_strict_mapping_and_union_error_redaction(mapping):
     assert "input_value" not in str(error.value)
 
 
+@pytest.mark.parametrize("url,reason", [
+    ("ftp://fixture-api/v1", "scheme は http / https のみ"),
+    ("http:///v1", "host が空"),
+    ("http://fixture-api:abc", "host\\[:port\\] の形式が不正"),
+    ("http://fixture-api:65536", "port は 1〜65535"),
+    ("http://fixture-api:0", "port は 1〜65535"),
+    ("http://localhost", "localhost は DP 自身"),
+    ("http://api.localhost", "localhost は DP 自身"),
+    ("http://127.0.0.1", "loopback アドレスは DP 自身"),
+    ("http://[::ffff:127.0.0.1]", "loopback アドレスは DP 自身"),
+    ("http://2130706433", "dotted-quad IPv4"),
+    ("http://0x7f.1", "dotted-quad IPv4"),
+    ("http://api..example.com", "RFC 1123"),
+    ("http://fixture-api/a/../b", "dot segment"),
+    ("http://fixture-api/é", "非 ASCII"),
+    ("http://user:password@fixture-api", "userinfo"),
+])
+def test_invalid_url_reason_is_reported(url, reason):
+    with pytest.raises(ValidationError, match=f"url: .*{reason}"):
+        custom({"url": url})
+
+
+@pytest.mark.parametrize("mapping,reason", [
+    ({}, "url: Field required"),
+    ({"url": 123}, "url: Input should be a valid string"),
+    ({"url": "http://fixture-api", SENTINEL: "x"}, "upstream に未知のキーがあります"),
+    ({"url": "http://fixture-api", "smoke": {SENTINEL: "x"}}, "smoke に未知のキーがあります"),
+    ({"url": "http://fixture-api", "strip_path": "false"}, "strip_path: Input should be a valid boolean"),
+    ({"url": "http://fixture-api", "route_path": "/api/"}, "route_path の末尾 slash"),
+    ({"url": "http://fixture-api", "route_path": "/api", "smoke": {"path": "/other"}},
+     "smoke.path は route_path またはその配下"),
+    ({"url": "http://fixture-api", "smoke": {"expected_status": 199}},
+     "smoke.expected_status: Input should be greater than or equal to 200"),
+    ({"url": "http://fixture-api", "smoke": {"expected_status": 300}},
+     "smoke.expected_status: Input should be less than or equal to 299"),
+])
+def test_mapping_error_reason_is_reported_without_input(mapping, reason):
+    with pytest.raises(ValidationError, match=reason) as error:
+        custom(mapping)
+    assert SENTINEL not in str(error.value)
+
+
 @pytest.mark.parametrize("route,smoke", [
     ("api", "/api"), ("/api/", "/api/a"), ("/api", "/apix"),
     ("/api", "/api-v2"), ("/api", "/other/api"), ("/api", "/api/../x"),
