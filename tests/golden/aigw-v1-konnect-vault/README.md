@@ -14,6 +14,7 @@
 | Observability | otel-lgtm |
 | 秘匿情報 | HashiCorp Vault |
 | Prompt Guard | なし |
+| Prompt Compressor | なし |
 
 ## 前提
 

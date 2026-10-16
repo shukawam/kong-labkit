@@ -1,0 +1,14 @@
+{{ prompt_compressor.host }}:
+  <<: *default
+  container_name: {{ prompt_compressor.host }}
+  image: {{ prompt_compressor.image }}
+  environment:
+    # Apple Silicon の Docker は mps を使えず、auto だと起動時のデバイス判定でコケる
+    LLMLINGUA_DEVICE_MAP: cpu
+  healthcheck:
+    test: ["CMD-SHELL", "curl -sf http://localhost:{{ prompt_compressor.port }}/status || exit 1"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    # LLMLingua のモデル読み込みに時間がかかる
+    start_period: 120s

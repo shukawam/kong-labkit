@@ -14,6 +14,7 @@
 | Observability | otel-lgtm |
 | 秘匿情報 | 環境変数 |
 | Prompt Guard | observe |
+| Prompt Compressor | なし |
 
 ## 前提
 

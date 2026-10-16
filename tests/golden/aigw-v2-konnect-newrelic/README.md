@@ -14,6 +14,7 @@
 | Observability | New Relic（https://otlp.nr-data.net） |
 | 秘匿情報 | 環境変数 |
 | Prompt Guard | なし |
+| Prompt Compressor | なし |
 
 ## 前提
 
