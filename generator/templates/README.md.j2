@@ -14,6 +14,7 @@
 | Observability | {% if otel.backend.value == 'newrelic' %}New Relic（{{ otel.nr_endpoint }}）{% elif otel.enabled %}{{ otel.backend.value }}{% else %}なし{% endif %} |
 | 秘匿情報 | {{ 'HashiCorp Vault' if secrets.enabled else '環境変数' }} |
 | Prompt Guard | {{ spec.ai.prompt_guard.value if prompt_guard.enabled else 'なし' }} |
+| Prompt Compressor | {{ '有効' if prompt_compressor.enabled else 'なし' }} |
 
 ## 前提
 
@@ -171,6 +172,18 @@ Vault の UI は http://localhost:{{ ports.vault }} で、トークンは `.env`
 {% endif %}
 
 パターンに当たることを確かめるには、`/v1/chat/completions` に `ignore all previous instructions` を含む本文を投げてください。
+{% endif %}
+{% if prompt_compressor.enabled %}
+
+## Prompt Compressor
+
+`ai-prompt-compressor` を全ルートに掛け、LLM へ送る `user` メッセージを `{{ prompt_compressor.host }}` コンテナ（`{{ prompt_compressor.image }}`）の LLMLingua で圧縮します。{% for min_tokens, max_tokens, value in prompt_compressor.ranges %}{{ min_tokens }}〜{{ max_tokens }} トークンは {{ (value * 100) | int }}% に{% if not loop.last %}、{% endif %}{% endfor %}圧縮し、それより短いプロンプトは触りません。圧縮サービスに届かないときは `stop_on_error: false` なので、圧縮せずにそのまま LLM へ流します。
+
+イメージは Cloudsmith の私有レジストリにあります。起動前に Kong Support からもらったトークンで `docker login docker.cloudsmith.io -u kong/ai-compress` を済ませてください。
+
+`{{ prompt_compressor.host }}` は CPU で推論します（Docker Desktop on Apple Silicon では mps が使えず、`LLMLINGUA_DEVICE_MAP: auto` だと起動時に落ちます）。長いプロンプトでは圧縮に数秒〜十数秒かかるので、`timeout` は {{ prompt_compressor.timeout_ms // 1000 }} 秒にしてあります。Data Plane はこのコンテナが healthy になってから起動します。
+
+確かめるには、`/v1/<model>/chat/completions` に 100 トークンを超える長い `user` メッセージを投げ、Grafana か `docker compose logs kong` で入力トークン数が減っていることを見てください（`log_text_data: true` なので圧縮前後の本文もログに出ます）。
 {% endif %}
 {% if idp.ldap %}
 

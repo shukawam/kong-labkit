@@ -1,0 +1,122 @@
+_defaults:
+  kongctl:
+    namespace: acme
+
+ai_gateways:
+  - ref: acme-ai-gateway
+    name: acme-ai-gateway
+    display_name: acme-ai-gateway
+    deployment_type: hybrid
+
+    model_providers:
+      - ref: azure
+        ai_gateway: !ref acme-ai-gateway#id
+        name: azure
+        type: azure
+        display_name: azure
+        config:
+          instance: acme-foundry
+          auth:
+            type: basic
+            headers:
+              - name: api-key
+                value: !env AZURE_OPENAI_API_KEY
+
+    models:
+      - ref: gpt-5-6
+        ai_gateway: !ref acme-ai-gateway#id
+        name: gpt-5-6
+        display_name: gpt-5-6
+        type: model
+        enabled: true
+        capabilities:
+          - generate
+        formats:
+          - type: openai
+        targets:
+          - name: gpt-5-6
+            provider: azure
+            weight: 100
+            config:
+              type: azure
+              deployment_id: gpt-5.6
+              api_version: 2024-12-01-preview
+        config:
+          model:
+            name_header: true
+          response_streaming: allow
+          # v1 の log_payloads に相当。v2 でのフィールド名は payloads で、log_payloads は弾かれる。
+          # プロンプトと応答本文をそのままスパンに載せるので、検証環境だけの設定
+          logging:
+            payloads: true
+          route:
+            paths:
+              - /v1/gpt-5-6
+            protocols:
+              - http
+              - https
+            strip_path: true
+
+    policies:
+      - ref: acme-ai-gateway-ai-prompt-compressor
+        ai_gateway: !ref acme-ai-gateway#id
+        name: ai-prompt-compressor
+        display_name: AI Prompt Compressor
+        type: ai-prompt-compressor
+        global: true
+        enabled: true
+        config:
+          provider: kong
+          # DP と同じ compose ネットワーク上のコンテナ。パスはプラグイン側が付ける
+          compressor_url: http://ai-compressor:8080
+          compressor_type: rate
+          # 短いプロンプトは圧縮すると意味が崩れやすいので触らず、長いほど強く圧縮する
+          compression_ranges:
+            - min_tokens: 100
+              max_tokens: 1000
+              value: 0.8
+            - min_tokens: 1000
+              max_tokens: 100000
+              value: 0.5
+          message_type:
+            - user
+          # CPU 推論は長いプロンプトで既定の 10 秒を超える
+          timeout: 30000
+          keepalive_timeout: 60000
+          log_text_data: true
+          stop_on_error: false
+      - ref: acme-ai-gateway-opentelemetry
+        ai_gateway: !ref acme-ai-gateway#id
+        name: opentelemetry
+        display_name: OpenTelemetry
+        type: opentelemetry
+        global: true
+        enabled: true
+        config:
+          traces_endpoint: http://otel-lgtm:4318/v1/traces
+          # logs_endpoint が運ぶのは Kong 内部のエラーログだけ。
+          # アクセスログはプラグイン内の別エクスポータで、これを設定しないと出ない。
+          # 平坦な access_logs_endpoint は非推奨なのでレコード側に書く
+          logs_endpoint: http://otel-lgtm:4318/v1/logs
+          access_logs:
+            endpoint: http://otel-lgtm:4318/v1/logs
+          # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
+          # Prometheus プラグインは使わない
+          metrics:
+            endpoint: http://otel-lgtm:4318/v1/metrics
+            push_interval: 15
+            enable_request_metrics: true
+            enable_latency_metrics: true
+            enable_bandwidth_metrics: true
+            enable_upstream_health_metrics: true
+            enable_consumer_attribute: true
+            enable_ai_metrics: true
+          resource_attributes:
+            service.name: acme-ai-gateway
+
+    data_plane_certificates:
+      - ref: acme-ai-gateway-cert
+        ai_gateway: !ref acme-ai-gateway#id
+        title: Cluster Certificate
+        description: Cluster certificate for acme-ai-gateway
+        cert: !file ../.certs/cluster.crt
