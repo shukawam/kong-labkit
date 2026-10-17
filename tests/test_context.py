@@ -314,6 +314,13 @@ def test_env_vars_konnect_azure_api_key():
     assert ctx.env_vars["AZURE_OPENAI_API_KEY"] == ""
 
 
+def test_env_vars_v2_bedrock_needs_aws_keys():
+    bedrock = {"type": "bedrock", "region": "ap-northeast-1", "models": [{"name": "claude-opus-5"}]}
+    ctx = build_context(spec_from(gateway="ai-gateway-v2", ai={"providers": [bedrock]}))
+    assert ctx.env_vars["AWS_ACCESS_KEY_ID"] == ""
+    assert ctx.env_vars["AWS_SECRET_ACCESS_KEY"] == ""
+
+
 def test_env_vars_self_managed_needs_license():
     ctx = build_context(spec_from(control_plane="self-managed"))
     assert ctx.env_vars["KONG_LICENSE_DATA"] == ""
