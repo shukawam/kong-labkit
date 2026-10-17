@@ -82,7 +82,7 @@ ai_gateways:
         formats:
           - type: openai
         targets:
-          - name: {{ model.name }}
+          - name: {{ model.model_id or model.name }}
             provider: {{ provider.type.value }}
             weight: 100
             config:

@@ -21,10 +21,10 @@ ai_gateways:
             secret_access_key: !env AWS_SECRET_ACCESS_KEY
 
     models:
-      - ref: apac.anthropic.claude-sonnet-4-5-20250929-v1:0
+      - ref: claude-sonnet-4-5
         ai_gateway: !ref acme-ai-gateway#id
-        name: apac.anthropic.claude-sonnet-4-5-20250929-v1:0
-        display_name: apac.anthropic.claude-sonnet-4-5-20250929-v1:0
+        name: claude-sonnet-4-5
+        display_name: claude-sonnet-4-5
         type: model
         enabled: true
         capabilities:
@@ -48,7 +48,7 @@ ai_gateways:
             payloads: true
           route:
             paths:
-              - /v1/apac.anthropic.claude-sonnet-4-5-20250929-v1:0
+              - /v1/claude-sonnet-4-5
             protocols:
               - http
               - https

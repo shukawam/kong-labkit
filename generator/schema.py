@@ -194,6 +194,9 @@ class CustomUpstreamSpec(Strict):
 
 class Model(Strict):
     name: str
+    # v2 の targets[].name に渡す上流側のモデル ID。name は ref とルートパスになるので
+    # Bedrock の inference profile ID（":0" 付き）のようにコロンを含む値はこちらに書く
+    model_id: str | None = None
     deployment_id: str | None = None
     api_version: str | None = None
     # 100 万トークンあたりの USD。ai-proxy-advanced の input_cost / output_cost にそのまま渡す

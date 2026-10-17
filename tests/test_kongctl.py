@@ -197,6 +197,21 @@ def test_bedrock_provider_emits_aws_auth_and_puts_region_on_the_target():
     assert target["config"] == {"type": "bedrock", "region": "ap-northeast-1"}
 
 
+def test_model_id_goes_to_the_target_and_keeps_the_ref_free_of_colons():
+    # Bedrock の inference profile ID は ":0" で終わり、kongctl は ref にコロンを許さない
+    bedrock = {
+        "type": "bedrock",
+        "region": "ap-northeast-1",
+        "models": [
+            {"name": "claude-sonnet-4-5", "model_id": "apac.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+        ],
+    }
+    model = kongctl_of(ctx_for(gateway="ai-gateway-v2", ai={"providers": [bedrock]}))["ai_gateways"][0]["models"][0]
+    assert model["ref"] == model["name"] == "claude-sonnet-4-5"
+    assert model["targets"][0]["name"] == "apac.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    assert model["config"]["route"]["paths"] == ["/v1/claude-sonnet-4-5"]
+
+
 def test_balancer_follows_the_semantic_flags_not_the_vectordb():
     # vectordb を置いただけで semantic 設定が出ると、フラグが何も効いていないのと同じ
     ctx = ctx_for(

@@ -93,9 +93,9 @@ run = '''
 set -e
 curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8100/status
 # model は省けない。無いと AI Gateway が target を選べず ai-gateway.upstream.local の DNS 解決で 500 になる
-curl -sS -f -X POST http://localhost:8000/v1/apac.anthropic.claude-sonnet-4-5-20250929-v1:0/chat/completions \
+curl -sS -f -X POST http://localhost:8000/v1/claude-sonnet-4-5/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"apac.anthropic.claude-sonnet-4-5-20250929-v1:0","messages":[{"role":"user","content":"ping"}]}' > /dev/null
+  -d '{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"ping"}]}' > /dev/null
 echo "smoke: OK"
 '''
 
