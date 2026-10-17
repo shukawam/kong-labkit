@@ -1,0 +1,92 @@
+_defaults:
+  kongctl:
+    namespace: acme
+
+ai_gateways:
+  - ref: acme-ai-gateway
+    name: acme-ai-gateway
+    display_name: acme-ai-gateway
+    deployment_type: hybrid
+
+    model_providers:
+      - ref: bedrock
+        ai_gateway: !ref acme-ai-gateway#id
+        name: bedrock
+        type: bedrock
+        display_name: bedrock
+        config:
+          auth:
+            type: aws
+            access_key_id: !env AWS_ACCESS_KEY_ID
+            secret_access_key: !env AWS_SECRET_ACCESS_KEY
+
+    models:
+      - ref: apac.anthropic.claude-sonnet-4-5-20250929-v1:0
+        ai_gateway: !ref acme-ai-gateway#id
+        name: apac.anthropic.claude-sonnet-4-5-20250929-v1:0
+        display_name: apac.anthropic.claude-sonnet-4-5-20250929-v1:0
+        type: model
+        enabled: true
+        capabilities:
+          - generate
+        formats:
+          - type: openai
+        targets:
+          - name: apac.anthropic.claude-sonnet-4-5-20250929-v1:0
+            provider: bedrock
+            weight: 100
+            config:
+              type: bedrock
+              region: ap-northeast-1
+        config:
+          model:
+            name_header: true
+          response_streaming: allow
+          # v1 の log_payloads に相当。v2 でのフィールド名は payloads で、log_payloads は弾かれる。
+          # プロンプトと応答本文をそのままスパンに載せるので、検証環境だけの設定
+          logging:
+            payloads: true
+          route:
+            paths:
+              - /v1/apac.anthropic.claude-sonnet-4-5-20250929-v1:0
+            protocols:
+              - http
+              - https
+            strip_path: true
+
+    policies:
+      - ref: acme-ai-gateway-opentelemetry
+        ai_gateway: !ref acme-ai-gateway#id
+        name: opentelemetry
+        display_name: OpenTelemetry
+        type: opentelemetry
+        global: true
+        enabled: true
+        config:
+          traces_endpoint: http://otel-lgtm:4318/v1/traces
+          # logs_endpoint が運ぶのは Kong 内部のエラーログだけ。
+          # アクセスログはプラグイン内の別エクスポータで、これを設定しないと出ない。
+          # 平坦な access_logs_endpoint は非推奨なのでレコード側に書く
+          logs_endpoint: http://otel-lgtm:4318/v1/logs
+          access_logs:
+            endpoint: http://otel-lgtm:4318/v1/logs
+          # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
+          # Prometheus プラグインは使わない
+          metrics:
+            endpoint: http://otel-lgtm:4318/v1/metrics
+            push_interval: 15
+            enable_request_metrics: true
+            enable_latency_metrics: true
+            enable_bandwidth_metrics: true
+            enable_upstream_health_metrics: true
+            enable_consumer_attribute: true
+            enable_ai_metrics: true
+          resource_attributes:
+            service.name: acme-ai-gateway
+
+    data_plane_certificates:
+      - ref: acme-ai-gateway-cert
+        ai_gateway: !ref acme-ai-gateway#id
+        title: Cluster Certificate
+        description: Cluster certificate for acme-ai-gateway
+        cert: !file ../.certs/cluster.crt

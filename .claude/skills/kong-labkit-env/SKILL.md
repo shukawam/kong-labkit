@@ -64,7 +64,7 @@ description: Use when someone describes a Kong verification environment in natur
 |---|---|
 | v1 で `semantic_routing: true` | 検証は通り vectordb も起動するが `kong.yaml` に balancer が出ない。完全な no-op |
 | v2 で複数プロバイダに振り分け | v2 は model 1 つにつき専用ルート `/v1/<model名>` を出す。1 model = 1 target なので振り分けにならない |
-| v2 で `bedrock` / `vertex` | kongctl テンプレートが資格情報を出さない |
+| v2 で `vertex` | kongctl テンプレートが資格情報を出さない |
 | v1 で `vertex` | `gcp_service_account_json` にパスが入る。Kong が要求するのは JSON の中身 |
 | LDAP でグループごとに権限を変える | 出るのは `ldap-auth-advanced` だけ。グループ別の認可は生成されない |
 | Keycloak で `.env` の `KEYCLOAK_CLIENT_SECRET` を変える | `kong.yaml` と `realm-export.json` に実値が埋め込み済みで、`.env` 側は参照されない |

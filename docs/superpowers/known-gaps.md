@@ -8,7 +8,7 @@
 
 `generator/context.py` の `_build_provider_auth` と `generator/templates/config/kongctl.yaml.j2` が、「プロバイダ → ヘッダ名・環境変数名」の同じ対応表を別々に持っている。decK 側は `${{ env "DECK_X" }}`、kongctl 側は `!env X` と参照構文が違うため機械的な共有ができず、片側だけ直る形が残っている。
 
-あわせて、AI Gateway v2 の kongctl テンプレートは bedrock と vertex が `auth: type: <provider>` に落ち、資格情報を一切出さない。この 2 プロバイダを v2 で使う構成は現状では動かない。
+あわせて、AI Gateway v2 の kongctl テンプレートは vertex が `auth: type: vertex` に落ち、資格情報を一切出さない。vertex を v2 で使う構成は現状では動かない（bedrock は `auth.type: aws` で対応済み）。
 
 ### `idp.type: ldap` が AI Gateway v2 で使えない
 

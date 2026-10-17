@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=../schemas/env.schema.json
+customer: acme
+gateway: ai-gateway-v2
+control_plane: konnect
+
+ai:
+  providers:
+    - type: bedrock
+      region: ap-northeast-1
+      models:
+        - name: apac.anthropic.claude-sonnet-4-5-20250929-v1:0
+
+idp:
+  type: none
+
+cache:
+  type: none
+
+vectordb:
+  type: none

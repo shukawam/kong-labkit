@@ -177,6 +177,26 @@ def test_multiple_providers_emit_multiple_model_providers():
     assert [m["name"] for m in gw["models"]] == ["gpt-5-6", "claude-opus-5"]
 
 
+def test_bedrock_provider_emits_aws_auth_and_puts_region_on_the_target():
+    bedrock = {
+        "type": "bedrock",
+        "region": "ap-northeast-1",
+        "models": [{"name": "claude-opus-5"}],
+    }
+    gw = kongctl_of(ctx_for(gateway="ai-gateway-v2", ai={"providers": [bedrock]}))["ai_gateways"][0]
+    provider = gw["model_providers"][0]
+    assert provider["config"] == {
+        "auth": {
+            "type": "aws",
+            "access_key_id": {"__tag__": "!env", "value": "AWS_ACCESS_KEY_ID"},
+            "secret_access_key": {"__tag__": "!env", "value": "AWS_SECRET_ACCESS_KEY"},
+        }
+    }
+    target = gw["models"][0]["targets"][0]
+    assert target["provider"] == "bedrock"
+    assert target["config"] == {"type": "bedrock", "region": "ap-northeast-1"}
+
+
 def test_balancer_follows_the_semantic_flags_not_the_vectordb():
     # vectordb を置いただけで semantic 設定が出ると、フラグが何も効いていないのと同じ
     ctx = ctx_for(

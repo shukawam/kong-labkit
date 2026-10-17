@@ -49,6 +49,7 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 |---|---|
 | `aigw-v2-konnect-redis-stack.yaml` | semantic cache を redis-stack で有効にする |
 | `aigw-v2-konnect-prompt-guard.yaml` | ai-prompt-guard を観測モードで掛ける |
+| `aigw-v2-konnect-bedrock.yaml` | モデルプロバイダを Amazon Bedrock にする |
 | `aigw-v1-konnect-lldap.yaml` | lldap を IdP として同梱する |
 | `aigw-v1-konnect-vault.yaml` | 秘匿情報のバックエンドを Vault にする |
 | `apigw-self-managed-keycloak.yaml` | Keycloak を IdP として同梱する |

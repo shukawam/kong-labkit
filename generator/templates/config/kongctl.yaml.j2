@@ -35,9 +35,6 @@ ai_gateways:
 {% if provider.instance %}
           instance: {{ provider.instance }}
 {% endif %}
-{% if provider.region %}
-          region: {{ provider.region }}
-{% endif %}
 {% if provider.type.value == 'azure' and provider.auth.value == 'managed-identity' %}
           auth:
             type: azure
@@ -60,6 +57,11 @@ ai_gateways:
             headers:
               - name: x-api-key
                 value: !env ANTHROPIC_API_KEY
+{% elif provider.type.value == 'bedrock' %}
+          auth:
+            type: aws
+            access_key_id: !env AWS_ACCESS_KEY_ID
+            secret_access_key: !env AWS_SECRET_ACCESS_KEY
 {% else %}
           auth:
             type: {{ provider.type.value }}
@@ -90,6 +92,9 @@ ai_gateways:
 {% endif %}
 {% if model.api_version %}
               api_version: {{ model.api_version }}
+{% endif %}
+{% if provider.region %}
+              region: {{ provider.region }}
 {% endif %}
         config:
           model:
