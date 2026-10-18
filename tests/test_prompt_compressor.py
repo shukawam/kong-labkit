@@ -46,7 +46,6 @@ def test_no_sidecar_and_no_policy_when_off():
 def test_policy_points_at_the_sidecar():
     ctx = v2_ctx(prompt_compressor=True)
     policy = policy_of(ctx, "ai-prompt-compressor")
-    assert policy["global"] is True
     assert policy["enabled"] is True
     config = policy["config"]
     assert config["provider"] == "kong"
@@ -88,3 +87,23 @@ def test_readme_lists_the_compressor_as_off_without_explaining_it():
     readme = render_all(v2_ctx())["README.md"]
     assert "| Prompt Compressor | なし |" in readme
     assert "## Prompt Compressor" not in readme
+
+
+def models_of(ctx) -> list[dict]:
+    return load_kongctl(render_all(ctx)["config/kongctl.yaml"])["ai_gateways"][0]["models"]
+
+
+def test_compressor_is_attached_per_model_and_skips_bedrock():
+    # ai-prompt-compressor は ai-proxy-advanced が SigV4 署名した後に OpenAI 形式の body を書き戻すので、
+    # Bedrock へは必ず署名不一致の 403 になる（2.0.3 / 2.2.0 で実測）。global にせず他プロバイダにだけ付ける
+    bedrock = {"type": "bedrock", "region": "ap-northeast-1", "models": [{"name": "claude-sonnet-4-5"}]}
+    ctx = ctx_for(gateway="ai-gateway-v2",
+                  ai={"providers": [AZURE_PROVIDER, bedrock], "prompt_compressor": True})
+    assert policy_of(ctx, "ai-prompt-compressor")["global"] is False
+    by_name = {m["name"]: m for m in models_of(ctx)}
+    assert by_name["gpt-5-6"]["policies"] == ["ai-prompt-compressor"]
+    assert "policies" not in by_name["claude-sonnet-4-5"]
+
+
+def test_models_carry_no_policies_list_when_compressor_is_off():
+    assert all("policies" not in m for m in models_of(v2_ctx()))

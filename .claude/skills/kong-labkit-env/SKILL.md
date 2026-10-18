@@ -81,7 +81,7 @@ description: Use when someone describes a Kong verification environment in natur
 | 「プラグインを試したい」「AI ではない」 | `gateway: api-gateway` + `upstream: httpbin` |
 | 「セマンティックキャッシュ」 | `ai.semantic_cache: true` + `vectordb.type` + `redis-stack` なら `cache.type: redis-stack` |
 | 「プロンプトインジェクション対策」「ガードレール」 | `ai.prompt_guard: observe`（検知して通す、v2 のみ）か `block`（検知して弾く）。パターンは `context.py` の `PROMPT_GUARD_DENY_PATTERNS` 固定で、入力からは変えられない |
-| 「トークンを減らしたい」「プロンプト圧縮」「LLMLingua」 | `ai.prompt_compressor: true`。v2 のみ。圧縮サービスのコンテナが同梱されるが、イメージは Cloudsmith の私有レジストリなので Kong Support のトークンで `docker login` が要ると伝える |
+| 「トークンを減らしたい」「プロンプト圧縮」「LLMLingua」 | `ai.prompt_compressor: true`。v2 のみ。bedrock の model には掛からない（DP の不具合で署名が壊れるため generator が外す）。圧縮サービスのコンテナが同梱されるが、イメージは Cloudsmith の私有レジストリなので Kong Support のトークンで `docker login` が要ると伝える |
 | 「キーを置きたくない」「マネージド ID」 | `auth: managed-identity`（`azure` のみ） |
 | 「秘密を外出ししたい」「Vault」 | `secrets.backend: vault`。秘密を持つ provider か `idp` が無いと弾かれる |
 | 「New Relic に送りたい」 | `observability.backend: newrelic` + `newrelic.region`。traces/metrics/logs が全部行く（トレースだけには絞れない）。Grafana とダッシュボードは生成されなくなる |

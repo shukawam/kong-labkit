@@ -75,6 +75,10 @@ ai_gateways:
         display_name: {{ model.name }}
         type: model
         enabled: true
+{% if prompt_compressor.enabled and provider.type.value != 'bedrock' %}
+        policies:
+          - ai-prompt-compressor
+{% endif %}
         capabilities:
           - generate
         formats:
@@ -156,7 +160,9 @@ ai_gateways:
         name: ai-prompt-compressor
         display_name: AI Prompt Compressor
         type: ai-prompt-compressor
-        global: true
+        # global にすると ai-proxy-advanced の SigV4 署名後に body を書き戻し、Bedrock が必ず 403 になる。
+        # models[].policies で bedrock 以外にだけ付ける
+        global: false
         enabled: true
         config:
           provider: kong

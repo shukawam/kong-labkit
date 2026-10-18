@@ -69,7 +69,7 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 | `ai.semantic_routing` | 真偽値 | `false` | `vectordb` が必須になる |
 | `ai.embedding_model` | 文字列 | `text-embedding-3-large` | 次元数は `context.py` の表で解決する |
 | `ai.prompt_guard` | `none` / `observe` / `block` | `none` | `ai-prompt-guard` を全ルートに掛ける。AI Gateway 専用。`observe` は `ai-gateway-v2` のみ |
-| `ai.prompt_compressor` | 真偽値 | `false` | `ai-prompt-compressor` を全ルートに掛け、LLMLingua の圧縮サービス（Cloudsmith の私有イメージ、要 `docker login`）を同梱する。`ai-gateway-v2` のみ |
+| `ai.prompt_compressor` | 真偽値 | `false` | `ai-prompt-compressor` を bedrock 以外の model に掛け、LLMLingua の圧縮サービス（Cloudsmith の私有イメージ、要 `docker login`）を同梱する。`ai-gateway-v2` のみ |
 | `idp.type` | `keycloak` / `entra-id` / `ldap` / `none` | `none` | `keycloak` は `idp.realm` が必須。`ldap` は lldap を同梱し `ai-gateway-v2` とは併用不可 |
 | `idp.users[]` | `name` / `email` / `password` / `groups[]` | `tester` 1 名 | `ldap` のときだけ。グループは `users[].groups` から導出。`email` は `<name>@example.com`、`password` は `<name>-password` が既定 |
 | `cache.type` | `redis` / `redis-stack` / `none` | `none` | |
