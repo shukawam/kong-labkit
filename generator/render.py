@@ -31,6 +31,7 @@ def template_vars(ctx: Ctx) -> dict:
         "upstream": ctx.upstream,
         "semantic": ctx.semantic,
         "prompt_guard": ctx.prompt_guard,
+        "prompt_compressor": ctx.prompt_compressor,
         "certs": ctx.certs,
         "deck": ctx.deck,
         "secrets": ctx.secrets,

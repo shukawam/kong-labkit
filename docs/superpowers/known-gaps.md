@@ -10,6 +10,10 @@
 
 あわせて、AI Gateway v2 の kongctl テンプレートは vertex が `auth: type: vertex` に落ち、資格情報を一切出さない。vertex を v2 で使う構成は現状では動かない（bedrock は `auth.type: aws` で対応済み）。
 
+### `ai-prompt-compressor` は Bedrock の model に掛けると必ず 403 になる
+
+AI Gateway v2 の DP（2.0.3 と 2.2.0 で実測）では、`ai-proxy-advanced` が Bedrock 向けに Converse 形式へ変換した body を SigV4 で署名した後に、`ai-prompt-compressor` が OpenAI 形式の body を書き戻す。結果として Bedrock には署名と一致しない上に形式も違う body が届き、`The request signature we calculated does not match` の 403 になる。Azure OpenAI は署名が無く body 形式も同じなので表に出ない。generator は policy を `global: false` にして bedrock 以外の model にだけ `policies` で付けることで回避している。Kong 側の修正が入れば global に戻せる。
+
 ### `idp.type: ldap` が AI Gateway v2 で使えない
 
 `ai-gateway-v2` の生成物は `config/kongctl.yaml` の AI Gateway エンティティだけで、Kong のプラグインを書く経路が generator に無い。そのため `idp.type: ldap` は schema で v2 を弾いている。`ai.prompt_guard` の追加で `ai_gateways[].policies` を出す経路自体はできたが、そこに `ldap-auth-advanced` のような Gateway プラグインを載せて Konnect が受けるかは未検証で、`ai-prompt-guard` でしか確かめていない。v2 でも認証を掛けるには、kongctl テンプレートに plugin を出す仕組みを足す必要がある。同じ制約は将来 v2 に `openid-connect` を掛けたくなったときにも出る。

@@ -80,6 +80,10 @@ ai_gateways:
         display_name: {{ model.name }}
         type: model
         enabled: true
+{% if prompt_compressor.enabled and provider.type.value != 'bedrock' %}
+        policies:
+          - ai-prompt-compressor
+{% endif %}
         capabilities:
           - generate
         formats:
@@ -138,7 +142,7 @@ ai_gateways:
             strip_path: true
 {% endfor %}
 {% endfor %}
-{% if prompt_guard.enabled or otel.enabled %}
+{% if prompt_guard.enabled or prompt_compressor.enabled or otel.enabled %}
 
     policies:
 {% if prompt_guard.enabled %}
@@ -157,6 +161,36 @@ ai_gateways:
 {% for pattern in prompt_guard.patterns %}
             - '{{ pattern }}'
 {% endfor %}
+{% endif %}
+{% if prompt_compressor.enabled %}
+      - ref: {{ kong.cp_name }}-ai-prompt-compressor
+        ai_gateway: !ref {{ kong.cp_name }}#id
+        name: ai-prompt-compressor
+        display_name: AI Prompt Compressor
+        type: ai-prompt-compressor
+        # global にすると ai-proxy-advanced の SigV4 署名後に body を書き戻し、Bedrock が必ず 403 になる。
+        # models[].policies で bedrock 以外にだけ付ける
+        global: false
+        enabled: true
+        config:
+          provider: kong
+          # DP と同じ compose ネットワーク上のコンテナ。パスはプラグイン側が付ける
+          compressor_url: http://{{ prompt_compressor.host }}:{{ prompt_compressor.port }}
+          compressor_type: rate
+          # 短いプロンプトは圧縮すると意味が崩れやすいので触らず、長いほど強く圧縮する
+          compression_ranges:
+{% for min_tokens, max_tokens, value in prompt_compressor.ranges %}
+            - min_tokens: {{ min_tokens }}
+              max_tokens: {{ max_tokens }}
+              value: {{ value }}
+{% endfor %}
+          message_type:
+            - user
+          # CPU 推論は長いプロンプトで既定の 10 秒を超える
+          timeout: {{ prompt_compressor.timeout_ms }}
+          keepalive_timeout: {{ prompt_compressor.keepalive_timeout_ms }}
+          log_text_data: true
+          stop_on_error: false
 {% endif %}
 {% if otel.enabled %}
       - ref: {{ kong.cp_name }}-opentelemetry

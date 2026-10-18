@@ -220,6 +220,7 @@ class AiSpec(Strict):
     semantic_routing: bool = False
     embedding_model: str = "text-embedding-3-large"
     prompt_guard: PromptGuardMode = PromptGuardMode.NONE
+    prompt_compressor: bool = False
 
 
 class LdapUser(Strict):
@@ -459,6 +460,17 @@ class EnvSpec(Strict):
                 "（検知しても通す continue_on_detection が v1 のデータプレーンの "
                 "ai-prompt-guard に無く、必ずブロックになります）。"
                 "gateway: ai-gateway-v2 にするか、ai.prompt_guard: block にしてください。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_prompt_compressor_needs_the_v2_data_plane(self):
+        if self.ai.prompt_compressor and self.gateway is not Gateway.AI_GATEWAY_V2:
+            raise ValueError(
+                "ai.prompt_compressor は ai-gateway-v2 でだけ使えます"
+                "（generator が ai-prompt-compressor を書く経路は config/kongctl.yaml の policies だけで、"
+                "kong.yaml 側には出していません）。"
+                "gateway: ai-gateway-v2 にするか、ai.prompt_compressor を外してください。"
             )
         return self
 

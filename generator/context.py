@@ -139,6 +139,8 @@ KONG_IMAGES = {
 }
 
 LLDAP_IMAGE = "lldap/lldap:v0.6.3-alpine"
+# Cloudsmith の私有レジストリ。Kong Support からトークンをもらって docker login しないと pull できない
+COMPRESSOR_IMAGE = "docker.cloudsmith.io/kong/ai-compress/service:v0.0.5"
 
 CACHE_IMAGES = {
     CacheType.REDIS: "redis:8.0.2",
@@ -256,6 +258,18 @@ class PromptGuardCtx:
 
 
 @dataclass(frozen=True)
+class PromptCompressorCtx:
+    enabled: bool
+    image: str
+    host: str
+    port: int
+    # (min_tokens, max_tokens, 残す割合)
+    ranges: tuple[tuple[int, int, float], ...]
+    timeout_ms: int
+    keepalive_timeout_ms: int
+
+
+@dataclass(frozen=True)
 class CacheCtx:
     enabled: bool
     type: CacheType
@@ -347,6 +361,7 @@ class Ctx:
     upstream: UpstreamCtx
     semantic: SemanticCtx
     prompt_guard: PromptGuardCtx
+    prompt_compressor: PromptCompressorCtx
     certs: CertsCtx
     deck: DeckCtx
     secrets: "SecretsCtx"
@@ -709,6 +724,8 @@ def _build_services(spec: EnvSpec) -> list[str]:
         services.append("redis")
     if spec.vectordb.type is VectorDbType.PGVECTOR:
         services.append("pgvector")
+    if spec.ai.prompt_compressor:
+        services.append("ai-compressor")
     if spec.idp.type is IdpType.KEYCLOAK:
         services.append("keycloak")
     if spec.idp.type is IdpType.LDAP:
@@ -882,6 +899,20 @@ def _build_prompt_guard(spec: EnvSpec) -> PromptGuardCtx:
     )
 
 
+def _build_prompt_compressor(spec: EnvSpec) -> PromptCompressorCtx:
+    return PromptCompressorCtx(
+        enabled=spec.ai.prompt_compressor,
+        image=COMPRESSOR_IMAGE,
+        host="ai-compressor",
+        port=8080,
+        # 短いプロンプトは圧縮すると意味が崩れやすいので触らず、長いほど強く圧縮する
+        ranges=((100, 1000, 0.8), (1000, 100000, 0.5)),
+        # CPU 推論は長いプロンプトで既定の 10 秒を超える
+        timeout_ms=30000,
+        keepalive_timeout_ms=60000,
+    )
+
+
 def build_context(spec: EnvSpec) -> Ctx:
     ports = allocate_ports(spec)
     kong = _build_kong(spec)
@@ -899,6 +930,7 @@ def build_context(spec: EnvSpec) -> Ctx:
         upstream=_build_upstream(spec),
         semantic=_build_semantic(spec),
         prompt_guard=_build_prompt_guard(spec),
+        prompt_compressor=_build_prompt_compressor(spec),
         certs=_build_certs(spec, kong),
         deck=deck,
         secrets=_build_secrets(spec, refs),
