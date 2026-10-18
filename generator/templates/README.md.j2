@@ -210,6 +210,10 @@ Vault の UI は http://localhost:{{ ports.vault }} で、トークンは `.env`
 
 **グループでアクセスを分けたい。** `ldap-auth-advanced` は認証したユーザーの LDAP グループを ACL に載せるので、`config/kong/kong.yaml` のルートに `acl` プラグインを足し、`allow` に `{{ idp.ldap.groups | join('` や `') }}` を並べれば経路ごとに通すグループを絞れます。どのグループをどの経路に許すかは構成ごとの判断なので、generator では生成していません。
 {% endif %}
+{% if spec.gateway.value == 'ai-gateway-v2' and 'AWS_SESSION_TOKEN' in env_vars %}
+
+**AWS の一時クレデンシャルを更新したのに Bedrock が 403 のまま。** `.env` の `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` を新しい値にしても、`mise run sync` は「No changes detected」で止まります。kongctl は書き込み専用フィールド（秘密情報）の値を比較しないため、秘密だけが変わった更新を検出できません。`config/kongctl.yaml` の bedrock プロバイダの `display_name` を一時的に変えて `mise run sync`、元に戻してもう一度 `mise run sync` すると、更新に乗って新しい値が書き込まれます。`{"message":"The security token included in the request is invalid."}` は token が Konnect に届いていない状態、`... is expired` は届いているが期限切れの状態です。
+{% endif %}
 {% if spec.gateway.value == 'ai-gateway-v1' %}
 
 **認証後に 502 になる／AI Proxy Advanced が見当たらない。** `.env` のプロバイダ用 API キーが空だと、`ai-proxy-advanced` の作成がスキーマ検証で失敗します。decK の適用は一括でロールバックされないため、Service や LDAP プラグインだけが残ることがあります。`mise run setup`・`sync`・`diff` は必要な環境変数が空なら処理を開始せずに停止します。キーを設定して `mise run diff` で差分を確認し、`mise run sync` で再適用してください。ログの接続先が `127.0.0.1:32000` なら、AI Proxy が仮の Service URL を差し替えていません。

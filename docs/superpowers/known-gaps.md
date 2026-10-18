@@ -30,6 +30,10 @@ v2 の設定は `config/kongctl.yaml` の AI Gateway エンティティだけで
 
 Kong はフィールドの値全体が `{vault://...}` である場合にのみ解決する。値の一部に埋め込むとリテラル文字列として扱われ、認証が黙って失敗する。generator は OpenAI の `header_value` について `Bearer ` を前置した完成形を Vault に入れることで回避している。同じ形の秘密を足すときは、前置が必要かを確認すること。
 
+### kongctl は秘密の値だけが変わった更新を検出しない
+
+AI Gateway v2 の `config/kongctl.yaml` で `!env` から入れる秘密（`secret_access_key`、`session_token`、azure の `api-key` 値など）は Konnect 側で書き込み専用のため、kongctl の diff はそれらを比較しない。`.env` の値だけを変えて `mise run sync` しても「No changes detected」になり、Konnect には古い値が残る。実測では display_name のような非秘密フィールドを変えると更新が走り、その更新に秘密も乗る。Bedrock を STS の一時クレデンシャル（`auth: session-token`）で使うと期限ごとにこれを踏むので、生成物の README にトラブルシュートとして書いてある。恒久対応には kongctl 側の強制更新フラグか、generator が秘密のハッシュを非秘密フィールドに刻む仕組みが要る。
+
 ### 同梱の dev Vault は再起動で中身が消える
 
 `hashicorp/vault` を dev モードで動かしているためメモリ保持で、`docker compose restart vault` すると KV が空になる。`vault-bootstrap` の流し直しが必要。
