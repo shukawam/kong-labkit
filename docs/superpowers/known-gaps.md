@@ -34,9 +34,9 @@ v2 の設定は `config/kongctl.yaml` の AI Gateway エンティティだけで
 
 Kong はフィールドの値全体が `{vault://...}` である場合にのみ解決する。値の一部に埋め込むとリテラル文字列として扱われ、認証が黙って失敗する。generator は OpenAI の `header_value` について `Bearer ` を前置した完成形を Vault に入れることで回避している。同じ形の秘密を足すときは、前置が必要かを確認すること。
 
-### kongctl は秘密の値だけが変わった更新を検出しない
+### kongctl の `--write-secrets` 無しの更新は azure の `headers[].value` を消す
 
-AI Gateway v2 の `config/kongctl.yaml` で `!env` から入れる秘密（`secret_access_key`、`session_token`、azure の `api-key` 値など）は Konnect 側で書き込み専用のため、kongctl の diff はそれらを比較しない。`.env` の値だけを変えて `mise run sync` しても「No changes detected」になり、Konnect には古い値が残る。実測では display_name のような非秘密フィールドを変えると更新が走り、その更新に秘密も乗る。Bedrock を STS の一時クレデンシャル（`auth: session-token`）で使うと期限ごとにこれを踏むので、生成物の README にトラブルシュートとして書いてある。恒久対応には kongctl 側の強制更新フラグか、generator が秘密のハッシュを非秘密フィールドに刻む仕組みが要る。
+kongctl 1.20.2 で、`ai_gateway_model_provider` を `--write-secrets` 無しで更新する（`display_name` だけ変える等）と、Konnect 側の `config.auth.headers` から `api-key` の値が消え、Azure が 401 を返す。`!env` でも `!secret {source: !env}` でも同じ。以後 `diff` は headers の差分を毎回報告するが、更新しても戻らない。復旧は provider と依存する model を一度消して作り直すか、`--write-secrets` 付きで sync する。生成物の `sync` / `diff` / `setup` はこれを避けるため常に `--write-secrets` を付けている（書き込み専用の秘密は比較されないので、.env だけ変えた更新が走らない問題も同時に解消する）。`access_key_id` / `session_token` のような平坦な秘密フィールドではこの消失は起きない。
 
 ### 同梱の dev Vault は再起動で中身が消える
 

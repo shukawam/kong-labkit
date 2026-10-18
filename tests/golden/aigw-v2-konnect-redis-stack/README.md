@@ -67,6 +67,8 @@ Grafana の `Kong` フォルダに、`config/grafana/dashboards/` の定義が p
 
 **`CONTROL_PLANE_ID` が空のまま起動した。** `KONG_CLUSTER_CONTROL_PLANE` が `.us.cp.konghq.com:443` という形になり、名前解決に失敗します。`.env` を埋めて `mise run reset` してください。
 
+**`.env` のプロバイダ秘密を変えたら `mise run sync` し直す。** kongctl は書き込み専用フィールド（秘密）の値を比較しないため、生成物の `sync` / `diff` は常に `--write-secrets` を付けて `.env` の秘密を書き込みます。`mise run diff` の `secret write` がその対象です。Bedrock の `{"message":"The security token included in the request is invalid."}` は token が Konnect に届いていない状態、`... is expired` は届いているが期限切れの状態です。`config/kongctl.yaml` を手で `kongctl sync` するときも `--write-secrets` を付けてください。付けない更新は azure の `api-key` ヘッダを消します（kongctl 1.20.2 で実測）。
+
 **ベクトル検索が動かない。** `redis:8` ではなく `redis/redis-stack` を使っているか確認してください。素の Redis には検索モジュールが入っていません。
 
 **Grafana にメトリクスが 1 つも出ない。** `opentelemetry` プラグインは「その値が最後に更新された時刻」を datapoint のタイムスタンプに使います。起動時に一度だけ立つゲージ（`kong.cp.connection.status` など）は時間とともに古くなり、Prometheus に `too old sample` で弾かれます。OTLP は 1 点でも弾かれるとリクエスト全体が 400 になるため、Kong のメトリクスが丸ごと落ちます。`config/otel-lgtm/otelcol-config.yaml` の `transform/kong` プロセッサが送信時刻で上書きしてこれを避けているので、このマウントを外さないでください。`docker compose logs otel-lgtm | grep "Exporting failed"` で確認できます。

@@ -53,7 +53,7 @@ if [ ! -f {{ certs.crt_path }} ]; then
 fi
 {% if spec.control_plane.value == 'konnect' %}
 
-{{ deck.env_prefix }}kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT" --auto-approve
+{{ deck.env_prefix }}kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT" --auto-approve{% if spec.gateway.value == 'ai-gateway-v2' %} --write-secrets{% endif %}
 
 # --columns はヘッダ 1 行と値 1 行を返すので、jq を足さずに最終行だけ取る
 {% if spec.gateway.value == 'ai-gateway-v2' %}
@@ -105,7 +105,11 @@ run = '''
 set -euo pipefail
 {{ check_deck_env() }}
 {% if spec.control_plane.value == 'konnect' %}
-{{ deck.env_prefix }}kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT" --auto-approve
+{% if spec.gateway.value == 'ai-gateway-v2' %}
+# kongctl は書き込み専用の秘密を比較しないので、.env だけ変えても --write-secrets 無しでは更新が走らない。
+# しかも --write-secrets 無しの更新は azure の headers[].value を消す（1.20.2 で実測）ので常に付ける
+{% endif %}
+{{ deck.env_prefix }}kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT" --auto-approve{% if spec.gateway.value == 'ai-gateway-v2' %} --write-secrets{% endif %}
 {% else %}
 {{ deck.env_prefix }}deck gateway sync config/kong/kong.yaml --kong-addr http://localhost:{{ ports.admin }}
 {% endif %}
@@ -117,7 +121,7 @@ run = '''
 set -euo pipefail
 {{ check_deck_env() }}
 {% if spec.control_plane.value == 'konnect' %}
-{{ deck.env_prefix }}kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT"
+{{ deck.env_prefix }}kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT"{% if spec.gateway.value == 'ai-gateway-v2' %} --write-secrets{% endif %}
 {% else %}
 {{ deck.env_prefix }}deck gateway diff config/kong/kong.yaml --kong-addr http://localhost:{{ ports.admin }}
 {% endif %}
