@@ -753,6 +753,8 @@ def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
         else:
             for key in _PROVIDER_ENV.get(provider.type, []):
                 env[key] = ""
+            if provider.type is ProviderType.BEDROCK and provider.auth is AuthType.SESSION_TOKEN:
+                env["AWS_SESSION_TOKEN"] = ""
 
     if spec.idp.type is IdpType.KEYCLOAK:
         env["KEYCLOAK_ADMIN"] = "admin"

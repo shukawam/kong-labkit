@@ -81,6 +81,7 @@ description: Use when someone describes a Kong verification environment in natur
 | 「セマンティックキャッシュ」 | `ai.semantic_cache: true` + `vectordb.type` + `redis-stack` なら `cache.type: redis-stack` |
 | 「プロンプトインジェクション対策」「ガードレール」 | `ai.prompt_guard: observe`（検知して通す、v2 のみ）か `block`（検知して弾く）。パターンは `context.py` の `PROMPT_GUARD_DENY_PATTERNS` 固定で、入力からは変えられない |
 | 「キーを置きたくない」「マネージド ID」 | `auth: managed-identity`（`azure` のみ） |
+| 「AWS の一時クレデンシャルで Bedrock を使う」「ASIA で始まるキー」 | `auth: session-token`（`bedrock` のみ）。`.env` に `AWS_SESSION_TOKEN` が増え、期限切れのたびに `.env` 更新と `mise run sync` が要る |
 | 「秘密を外出ししたい」「Vault」 | `secrets.backend: vault`。秘密を持つ provider か `idp` が無いと弾かれる |
 | 「New Relic に送りたい」 | `observability.backend: newrelic` + `newrelic.region`。traces/metrics/logs が全部行く（トレースだけには絞れない）。Grafana とダッシュボードは生成されなくなる |
 | 「Grafana で見たい」 | 既定の `otel-lgtm`。何も書かない |

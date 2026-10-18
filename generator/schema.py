@@ -83,6 +83,8 @@ class PromptGuardMode(StrEnum):
 class AuthType(StrEnum):
     API_KEY = "api-key"
     MANAGED_IDENTITY = "managed-identity"
+    # bedrock 専用。STS の一時クレデンシャル（ASIA...）は session_token が無いと AWS が弾く
+    SESSION_TOKEN = "session-token"
 
 
 class Strict(BaseModel):

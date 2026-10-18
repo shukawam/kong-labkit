@@ -197,6 +197,19 @@ def test_bedrock_provider_emits_aws_auth_and_puts_region_on_the_target():
     assert target["config"] == {"type": "bedrock", "region": "ap-northeast-1"}
 
 
+def test_bedrock_session_token_auth_adds_the_token_to_aws_auth():
+    bedrock = {
+        "type": "bedrock",
+        "region": "ap-northeast-1",
+        "auth": "session-token",
+        "models": [{"name": "claude-sonnet-4-5"}],
+    }
+    gw = kongctl_of(ctx_for(gateway="ai-gateway-v2", ai={"providers": [bedrock]}))["ai_gateways"][0]
+    auth = gw["model_providers"][0]["config"]["auth"]
+    assert auth["type"] == "aws"
+    assert auth["session_token"] == {"__tag__": "!env", "value": "AWS_SESSION_TOKEN"}
+
+
 def test_model_id_goes_to_the_target_and_keeps_the_ref_free_of_colons():
     # Bedrock の inference profile ID は ":0" で終わり、kongctl は ref にコロンを許さない
     bedrock = {
