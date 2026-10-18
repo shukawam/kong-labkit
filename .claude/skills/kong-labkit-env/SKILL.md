@@ -65,7 +65,7 @@ description: Use when someone describes a Kong verification environment in natur
 |---|---|
 | v1 で `semantic_routing: true` | 検証は通り vectordb も起動するが `kong.yaml` に balancer が出ない。完全な no-op |
 | v2 で複数プロバイダに振り分け | v2 は model 1 つにつき専用ルート `/v1/<model名>` を出す。1 model = 1 target なので振り分けにならない |
-| v2 で `bedrock` / `vertex` | kongctl テンプレートが資格情報を出さない |
+| v2 で `vertex` | kongctl テンプレートが資格情報を出さない |
 | v1 で `vertex` | `gcp_service_account_json` にパスが入る。Kong が要求するのは JSON の中身 |
 | LDAP でグループごとに権限を変える | 出るのは `ldap-auth-advanced` だけ。グループ別の認可は生成されない |
 | Keycloak で `.env` の `KEYCLOAK_CLIENT_SECRET` を変える | `kong.yaml` と `realm-export.json` に実値が埋め込み済みで、`.env` 側は参照されない |
@@ -83,6 +83,7 @@ description: Use when someone describes a Kong verification environment in natur
 | 「プロンプトインジェクション対策」「ガードレール」 | `ai.prompt_guard: observe`（検知して通す、v2 のみ）か `block`（検知して弾く）。パターンは `context.py` の `PROMPT_GUARD_DENY_PATTERNS` 固定で、入力からは変えられない |
 | 「トークンを減らしたい」「プロンプト圧縮」「LLMLingua」 | `ai.prompt_compressor: true`。v2 のみ。bedrock の model には掛からない（DP の不具合で署名が壊れるため generator が外す）。圧縮サービスのコンテナが同梱されるが、イメージは Cloudsmith の私有レジストリなので Kong Support のトークンで `docker login` が要ると伝える |
 | 「キーを置きたくない」「マネージド ID」 | `auth: managed-identity`（`azure` のみ） |
+| 「AWS の一時クレデンシャルで Bedrock を使う」「ASIA で始まるキー」 | `auth: session-token`（`bedrock` のみ）。`.env` に `AWS_SESSION_TOKEN` が増え、期限切れのたびに `.env` 更新と `mise run sync` が要る |
 | 「秘密を外出ししたい」「Vault」 | `secrets.backend: vault`。秘密を持つ provider か `idp` が無いと弾かれる |
 | 「New Relic に送りたい」 | `observability.backend: newrelic` + `newrelic.region`。traces/metrics/logs が全部行く（トレースだけには絞れない）。Grafana とダッシュボードは生成されなくなる |
 | 「Grafana で見たい」 | 既定の `otel-lgtm`。何も書かない |
@@ -94,7 +95,7 @@ description: Use when someone describes a Kong verification environment in natur
 - **ポートは固定**: ホスト側ポートは `generator/context.py` の `PREFERRED_PORTS` から決まり、顧客ごとには振り直されない。2 つの環境を**同時に起動することはできない**。
 - **埋め込みの出どころ**: v1 は `ai.providers` の**先頭**のプロバイダから埋め込み認証を取る。v2 は**モデルごとにそのモデルの provider** で解決するので、プロバイダが複数あるなら**全部**に `ai.embedding_model` と同名のデプロイが要る（`deployment_id` は付かない）。
 - **vectordb の選び方**: 指定が無ければ `redis-stack`（`cache.type: redis-stack` とセットでコンテナ 1 つに収まる）。キャッシュを Redis で持ちたくないなら `pgvector`。
-- **v2 のモデル名**: `name` がそのまま ref とルートパス `/v1/<name>` になる。ドットを入れない（examples は `name: gpt-5-6` + `deployment_id: gpt-5.6`）。v2 は provider の ref が type 名なので、同じ type を 2 つ並べると衝突する。
+- **v2 のモデル名**: `name` がそのまま ref とルートパス `/v1/<name>` になる。ドットやコロンを入れない（Azure は `name: gpt-5-6` + `deployment_id: gpt-5.6`、Bedrock は `name: claude-sonnet-4-5` + `model_id: apac.anthropic.claude-sonnet-4-5-20250929-v1:0` のように上流の ID は別キーに書く）。v2 は provider の ref が type 名なので、同じ type を 2 つ並べると衝突する。
 
 ## 検証
 

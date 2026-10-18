@@ -8,7 +8,7 @@
 
 `generator/context.py` の `_build_provider_auth` と `generator/templates/config/kongctl.yaml.j2` が、「プロバイダ → ヘッダ名・環境変数名」の同じ対応表を別々に持っている。decK 側は `${{ env "DECK_X" }}`、kongctl 側は `!env X` と参照構文が違うため機械的な共有ができず、片側だけ直る形が残っている。
 
-あわせて、AI Gateway v2 の kongctl テンプレートは bedrock と vertex が `auth: type: <provider>` に落ち、資格情報を一切出さない。この 2 プロバイダを v2 で使う構成は現状では動かない。
+あわせて、AI Gateway v2 の kongctl テンプレートは vertex が `auth: type: vertex` に落ち、資格情報を一切出さない。vertex を v2 で使う構成は現状では動かない（bedrock は `auth.type: aws` で対応済み）。
 
 ### `ai-prompt-compressor` は Bedrock の model に掛けると必ず 403 になる
 
@@ -33,6 +33,10 @@ v2 の設定は `config/kongctl.yaml` の AI Gateway エンティティだけで
 ### vault 参照は文字列連結ができない
 
 Kong はフィールドの値全体が `{vault://...}` である場合にのみ解決する。値の一部に埋め込むとリテラル文字列として扱われ、認証が黙って失敗する。generator は OpenAI の `header_value` について `Bearer ` を前置した完成形を Vault に入れることで回避している。同じ形の秘密を足すときは、前置が必要かを確認すること。
+
+### kongctl は秘密の値だけが変わった更新を検出しない
+
+AI Gateway v2 の `config/kongctl.yaml` で `!env` から入れる秘密（`secret_access_key`、`session_token`、azure の `api-key` 値など）は Konnect 側で書き込み専用のため、kongctl の diff はそれらを比較しない。`.env` の値だけを変えて `mise run sync` しても「No changes detected」になり、Konnect には古い値が残る。実測では display_name のような非秘密フィールドを変えると更新が走り、その更新に秘密も乗る。Bedrock を STS の一時クレデンシャル（`auth: session-token`）で使うと期限ごとにこれを踏むので、生成物の README にトラブルシュートとして書いてある。恒久対応には kongctl 側の強制更新フラグか、generator が秘密のハッシュを非秘密フィールドに刻む仕組みが要る。
 
 ### 同梱の dev Vault は再起動で中身が消える
 
