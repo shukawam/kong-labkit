@@ -60,4 +60,6 @@ mise run smoke                     # Data Plane が Konnect に繋がるまで�
 
 **`CONTROL_PLANE_ID` が空のまま起動した。** `KONG_CLUSTER_CONTROL_PLANE` が `.us.cp.konghq.com:443` という形になり、名前解決に失敗します。`.env` を埋めて `mise run reset` してください。
 
+**`.env` のプロバイダ秘密を変えたら `mise run sync` し直す。** kongctl は書き込み専用フィールド（秘密）の値を比較しないため、生成物の `sync` / `diff` は常に `--write-secrets` を付けて `.env` の秘密を書き込みます。`mise run diff` の `secret write` がその対象です。Bedrock の `{"message":"The security token included in the request is invalid."}` は token が Konnect に届いていない状態、`... is expired` は届いているが期限切れの状態です。`config/kongctl.yaml` を手で `kongctl sync` するときも `--write-secrets` を付けてください。付けない更新は azure の `api-key` ヘッダを消します（kongctl 1.20.2 で実測）。
+
 **New Relic にメトリクスが 1 つも出ない。** まず `docker compose logs otel-collector | grep -i "permanent error"` を見てください。401 ならライセンスキー（`NEW_RELIC_LICENSE_KEY`）が空か、User Key を入れています。必要なのは Ingest License Key です。403 ならリージョンが合っていません（EU アカウントは `observability.newrelic.region: eu`）。次に、`opentelemetry` プラグインは「その値が最後に更新された時刻」を datapoint のタイムスタンプに使うため、起動時に一度だけ立つゲージ（`kong.cp.connection.status` など）は時間とともに古くなり、New Relic の受け付ける時間窓から外れて捨てられます。`config/otel-collector/config.yaml` の `transform/kong` プロセッサが送信時刻で上書きしてこれを避けているので、このマウントを外さないでください。

@@ -41,7 +41,6 @@ if [ ! -f .certs/cluster.crt ]; then
 fi
 
 DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve
-
 # --columns はヘッダ 1 行と値 1 行を返すので、jq を足さずに最終行だけ取る
 endpoint=$(kongctl get konnect gateway control-planes acme-ai-gateway --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --columns 'EP=.config.control_plane_endpoint' | tail -n 1)
 cp_id=${endpoint#https://}
@@ -74,8 +73,7 @@ run = '''
 set -euo pipefail
 : "${AZURE_OPENAI_API_KEY:?Set AZURE_OPENAI_API_KEY in .env}"
 
-DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve
-'''
+DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve'''
 
 [tasks.diff]
 description = "宣言的設定の差分を見る"
@@ -83,8 +81,7 @@ run = '''
 set -euo pipefail
 : "${AZURE_OPENAI_API_KEY:?Set AZURE_OPENAI_API_KEY in .env}"
 
-DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT"
-'''
+DECK_AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT"'''
 
 [tasks.logs]
 description = "ログを追う。サービス名を引数で渡せる"

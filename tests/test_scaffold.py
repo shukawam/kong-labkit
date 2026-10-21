@@ -226,3 +226,27 @@ def test_readme_endpoint_table_is_not_split_by_a_blank_line(overrides):
     rows = [line for line in table.strip().splitlines() if line.strip()]
     assert len(rows) == len(table.strip().splitlines()), table
     assert all(row.startswith("|") for row in rows), table
+
+
+@pytest.mark.parametrize("task", ["setup", "sync"])
+def test_konnect_v2_sync_always_writes_the_configured_secrets(task):
+    # kongctl は書き込み専用の秘密を比較しないので、.env だけ変えた更新は --write-secrets 無しでは走らない。
+    # さらに --write-secrets 無しの更新は azure の headers[].value を消す（1.20.2 で実測）
+    ctx = ctx_for(gateway="ai-gateway-v2", ai={"providers": [AZURE_PROVIDER]})
+    run = tomllib.loads(render_all(ctx)["mise.toml"])["tasks"][task]["run"]
+    assert "kongctl sync konnect -f config/kongctl.yaml" in run
+    assert "--write-secrets" in run
+
+
+def test_konnect_v2_diff_shows_the_secret_writes():
+    ctx = ctx_for(gateway="ai-gateway-v2", ai={"providers": [AZURE_PROVIDER]})
+    run = tomllib.loads(render_all(ctx)["mise.toml"])["tasks"]["diff"]["run"]
+    assert "kongctl diff konnect -f config/kongctl.yaml" in run
+    assert "--write-secrets" in run
+
+
+@pytest.mark.parametrize("gateway", ["api-gateway", "ai-gateway-v1"])
+def test_v1_konnect_tasks_have_no_secrets_to_write(gateway):
+    ctx = ctx_for(gateway=gateway, ai={"providers": [AZURE_PROVIDER]})
+    tasks = tomllib.loads(render_all(ctx)["mise.toml"])["tasks"]
+    assert all("--write-secrets" not in tasks[t]["run"] for t in ("setup", "sync", "diff"))
