@@ -141,8 +141,8 @@ KONG_IMAGES = {
 LLDAP_IMAGE = "lldap/lldap:v0.6.3-alpine"
 # Cloudsmith の私有レジストリ。Kong Support からトークンをもらって docker login しないと pull できない
 COMPRESSOR_IMAGE = "docker.cloudsmith.io/kong/ai-compress/service:v0.0.5"
-# 日本語版は ja_core_news_lg しか同梱しないので、英語 PII を拾うには en モデルを足した自前イメージをビルドする
-PII_SANITIZER_BASE_IMAGE = "docker.cloudsmith.io/kong/ai-pii/service:v0.2.0-ja"
+# 日本語版は ja_core_news_lg しか同梱しない（v0.3.1-ja で実測）ので、英語 PII を拾うには en モデルを足した自前イメージをビルドする
+PII_SANITIZER_BASE_IMAGE = "kong/ai-pii-service:v0.3.1-ja"
 
 CACHE_IMAGES = {
     CacheType.REDIS: "redis:8.0.2",

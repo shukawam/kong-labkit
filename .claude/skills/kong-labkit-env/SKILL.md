@@ -83,7 +83,7 @@ description: Use when someone describes a Kong verification environment in natur
 | 「セマンティックキャッシュ」 | `ai.semantic_cache: true` + `vectordb.type` + `redis-stack` なら `cache.type: redis-stack` |
 | 「プロンプトインジェクション対策」「ガードレール」 | `ai.prompt_guard: observe`（検知して通す、v2 のみ）か `block`（検知して弾く）。パターンは `context.py` の `PROMPT_GUARD_DENY_PATTERNS` 固定で、入力からは変えられない |
 | 「トークンを減らしたい」「プロンプト圧縮」「LLMLingua」 | `ai.prompt_compressor: true`。v2 のみ。bedrock の model には掛からない（DP の不具合で署名が壊れるため generator が外す）。圧縮サービスのコンテナが同梱されるが、イメージは Cloudsmith の私有レジストリなので Kong Support のトークンで `docker login` が要ると伝える |
-| 「個人情報をマスクしたい」「PII」「サニタイザ」 | `ai.pii_sanitizer: true`。v2 のみ。検知しても弾かずプレースホルダに置き換えて通す（弾きたい要望は未対応）。日本語版の Cloudsmith イメージに英語モデルを足した Dockerfile が生成物に入り、`mise run up` で手元ビルドされるので、`docker login docker.cloudsmith.io -u kong/ai-pii` が要ると伝える。Bedrock との併用は未検証 |
+| 「個人情報をマスクしたい」「PII」「サニタイザ」 | `ai.pii_sanitizer: true`。v2 のみ。検知しても弾かずプレースホルダに置き換えて通す（弾きたい要望は未対応）。Docker Hub の `kong/ai-pii-service` 日本語版に英語モデルを足した Dockerfile が生成物に入り、`mise run up` で手元ビルドされる（login 不要、初回は数分）。Bedrock との併用は未検証 |
 | 「キーを置きたくない」「マネージド ID」 | `auth: managed-identity`（`azure` のみ） |
 | 「AWS の一時クレデンシャルで Bedrock を使う」「ASIA で始まるキー」 | `auth: session-token`（`bedrock` のみ）。`.env` に `AWS_SESSION_TOKEN` が増え、期限切れのたびに `.env` 更新と `mise run sync` が要る |
 | 「秘密を外出ししたい」「Vault」 | `secrets.backend: vault`。秘密を持つ provider か `idp` が無いと弾かれる |

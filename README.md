@@ -72,7 +72,7 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 | `ai.embedding_model` | 文字列 | `text-embedding-3-large` | 次元数は `context.py` の表で解決する |
 | `ai.prompt_guard` | `none` / `observe` / `block` | `none` | `ai-prompt-guard` を全ルートに掛ける。AI Gateway 専用。`observe` は `ai-gateway-v2` のみ |
 | `ai.prompt_compressor` | 真偽値 | `false` | `ai-prompt-compressor` を bedrock 以外の model に掛け、LLMLingua の圧縮サービス（Cloudsmith の私有イメージ、要 `docker login`）を同梱する。`ai-gateway-v2` のみ |
-| `ai.pii_sanitizer` | 真偽値 | `false` | `ai-sanitizer` を全ルートに掛け、個人情報をマスクして通す（弾かない）。Cloudsmith の日本語版 PII イメージに英語モデルを足した Dockerfile を `build/pii-sanitizer/` に出し、compose が手元ビルドする（要 `docker login`）。`ai-gateway-v2` のみ |
+| `ai.pii_sanitizer` | 真偽値 | `false` | `ai-sanitizer` を全ルートに掛け、個人情報をマスクして通す（弾かない）。Docker Hub の `kong/ai-pii-service` 日本語版に英語モデルを足した Dockerfile を `build/pii-sanitizer/` に出し、compose が手元ビルドする。`ai-gateway-v2` のみ |
 | `idp.type` | `keycloak` / `entra-id` / `ldap` / `none` | `none` | `keycloak` は `idp.realm` が必須。`ldap` は lldap を同梱し `ai-gateway-v2` とは併用不可 |
 | `idp.users[]` | `name` / `email` / `password` / `groups[]` | `tester` 1 名 | `ldap` のときだけ。グループは `users[].groups` から導出。`email` は `<name>@example.com`、`password` は `<name>-password` が既定 |
 | `cache.type` | `redis` / `redis-stack` / `none` | `none` | |

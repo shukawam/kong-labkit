@@ -55,7 +55,7 @@ def test_image_is_built_locally_with_japanese_and_english_models():
     ctx = v2_ctx(pii_sanitizer=True)
     files = render_all(ctx)
     dockerfile = files["build/pii-sanitizer/Dockerfile"]
-    assert "FROM docker.cloudsmith.io/kong/ai-pii/service:" in dockerfile
+    assert "FROM kong/ai-pii-service:" in dockerfile
     assert "-ja" in dockerfile.splitlines()[0] or "-ja\n" in dockerfile
     assert "spacy download en_core_web_lg" in dockerfile
     assert "nlp_engine_conf.yml" in dockerfile
@@ -83,7 +83,7 @@ def test_readme_explains_the_sanitizer_only_when_on():
     readme_on = render_all(v2_ctx(pii_sanitizer=True))["README.md"]
     assert "| PII Sanitizer | 有効 |" in readme_on
     assert "## PII Sanitizer" in readme_on
-    assert "docker login docker.cloudsmith.io -u kong/ai-pii" in readme_on
+    assert "docker login" not in readme_on.split("## PII Sanitizer")[1].split("\n## ")[0]
 
     readme_off = render_all(v2_ctx())["README.md"]
     assert "| PII Sanitizer | なし |" in readme_off

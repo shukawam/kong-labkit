@@ -192,7 +192,7 @@ Vault の UI は http://localhost:{{ ports.vault }} で、トークンは `.env`
 
 `ai-sanitizer` を全ルートに掛け、LLM へ送る前に本文を `{{ pii_sanitizer.host }}` コンテナ（Presidio + spaCy）で検査し、個人情報をプレースホルダに置き換えてから転送します。`block_if_detected: false` なので検知しても弾きません。応答側のプレースホルダは元に戻しません（`recover_redacted: false`）。
 
-イメージは `{{ pii_sanitizer.base_image }}` をベースに `{{ pii_sanitizer.build_dir }}/Dockerfile` で手元ビルドします。日本語版イメージは日本語モデルしか持たないため、英語モデルを追加し `nlp_engine_conf.yml` で {% for lang, model in pii_sanitizer.languages %}{{ lang }}（`{{ model }}`）{% if not loop.last %}と {% endif %}{% endfor %}の両方を読み込ませています。ベースイメージは Cloudsmith の私有レジストリにあるので、`mise run up` の前に Kong Support からもらったトークンで `docker login docker.cloudsmith.io -u kong/ai-pii` を済ませてください。初回ビルドは英語モデルのダウンロードで数分かかります。
+イメージは `{{ pii_sanitizer.base_image }}` をベースに `{{ pii_sanitizer.build_dir }}/Dockerfile` で手元ビルドします。日本語版イメージは日本語モデルしか持たないため、英語モデルを追加し `nlp_engine_conf.yml` で {% for lang, model in pii_sanitizer.languages %}{{ lang }}（`{{ model }}`）{% if not loop.last %}と {% endif %}{% endfor %}の両方を読み込ませています。ベースイメージは Docker Hub の公開イメージなので login は要りません。初回ビルドは英語モデルのダウンロードで数分かかります。
 
 spaCy の lg モデルを 2 言語分読み込むため起動に時間がかかり、メモリも数 GB 使います。Data Plane はこのコンテナが healthy になってから起動します。
 

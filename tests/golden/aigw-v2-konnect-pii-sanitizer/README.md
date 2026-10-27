@@ -65,7 +65,7 @@ Grafana の `Kong` フォルダに、`config/grafana/dashboards/` の定義が p
 
 `ai-sanitizer` を全ルートに掛け、LLM へ送る前に本文を `pii-sanitizer` コンテナ（Presidio + spaCy）で検査し、個人情報をプレースホルダに置き換えてから転送します。`block_if_detected: false` なので検知しても弾きません。応答側のプレースホルダは元に戻しません（`recover_redacted: false`）。
 
-イメージは `docker.cloudsmith.io/kong/ai-pii/service:v0.2.0-ja` をベースに `build/pii-sanitizer/Dockerfile` で手元ビルドします。日本語版イメージは日本語モデルしか持たないため、英語モデルを追加し `nlp_engine_conf.yml` で ja（`ja_core_news_lg`）と en（`en_core_web_lg`）の両方を読み込ませています。ベースイメージは Cloudsmith の私有レジストリにあるので、`mise run up` の前に Kong Support からもらったトークンで `docker login docker.cloudsmith.io -u kong/ai-pii` を済ませてください。初回ビルドは英語モデルのダウンロードで数分かかります。
+イメージは `kong/ai-pii-service:v0.3.1-ja` をベースに `build/pii-sanitizer/Dockerfile` で手元ビルドします。日本語版イメージは日本語モデルしか持たないため、英語モデルを追加し `nlp_engine_conf.yml` で ja（`ja_core_news_lg`）と en（`en_core_web_lg`）の両方を読み込ませています。ベースイメージは Docker Hub の公開イメージなので login は要りません。初回ビルドは英語モデルのダウンロードで数分かかります。
 
 spaCy の lg モデルを 2 言語分読み込むため起動に時間がかかり、メモリも数 GB 使います。Data Plane はこのコンテナが healthy になってから起動します。
 
