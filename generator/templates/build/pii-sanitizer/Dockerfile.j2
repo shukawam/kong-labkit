@@ -1,0 +1,7 @@
+FROM {{ pii_sanitizer.base_image }}
+{% for lang, model in pii_sanitizer.languages %}
+{% if lang != 'ja' %}
+RUN python -m spacy download {{ model }}
+{% endif %}
+{% endfor %}
+COPY nlp_engine_conf.yml /app/ai_pii_service/nlp_engine_conf.yml

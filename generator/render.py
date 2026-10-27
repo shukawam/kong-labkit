@@ -32,6 +32,7 @@ def template_vars(ctx: Ctx) -> dict:
         "semantic": ctx.semantic,
         "prompt_guard": ctx.prompt_guard,
         "prompt_compressor": ctx.prompt_compressor,
+        "pii_sanitizer": ctx.pii_sanitizer,
         "certs": ctx.certs,
         "deck": ctx.deck,
         "secrets": ctx.secrets,
@@ -80,6 +81,14 @@ def render_all(ctx: Ctx) -> dict[str, str]:
             {k.replace("config/grafana/", "config/grafana/dashboards/"): v
              for k, v in grafana.items()}
         )
+    if ctx.pii_sanitizer.enabled:
+        build_dir = ctx.pii_sanitizer.build_dir
+        files[f"{build_dir}/Dockerfile"] = env.get_template(
+            "build/pii-sanitizer/Dockerfile.j2"
+        ).render(**variables)
+        files[f"{build_dir}/nlp_engine_conf.yml"] = env.get_template(
+            "build/pii-sanitizer/nlp_engine_conf.yml.j2"
+        ).render(**variables)
     if ctx.vector.enabled and ctx.vector.type.value == "pgvector":
         files["config/pgvector/init.sql"] = "CREATE EXTENSION IF NOT EXISTS vector;\n"
     if ctx.idp.type.value == "keycloak":

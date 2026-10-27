@@ -1,0 +1,112 @@
+_defaults:
+  kongctl:
+    namespace: acme
+
+ai_gateways:
+  - ref: acme-ai-gateway
+    name: acme-ai-gateway
+    display_name: acme-ai-gateway
+    deployment_type: hybrid
+
+    model_providers:
+      - ref: azure
+        ai_gateway: !ref acme-ai-gateway#id
+        name: azure
+        type: azure
+        display_name: azure
+        config:
+          instance: acme-foundry
+          auth:
+            type: basic
+            headers:
+              - name: api-key
+                value: !env AZURE_OPENAI_API_KEY
+
+    models:
+      - ref: gpt-5-6
+        ai_gateway: !ref acme-ai-gateway#id
+        name: gpt-5-6
+        display_name: gpt-5-6
+        type: model
+        enabled: true
+        capabilities:
+          - generate
+        formats:
+          - type: openai
+        targets:
+          - name: gpt-5-6
+            provider: azure
+            weight: 100
+            config:
+              type: azure
+              deployment_id: gpt-5.6
+              api_version: 2024-12-01-preview
+        config:
+          model:
+            name_header: true
+          response_streaming: allow
+          # v1 の log_payloads に相当。v2 でのフィールド名は payloads で、log_payloads は弾かれる。
+          # プロンプトと応答本文をそのままスパンに載せるので、検証環境だけの設定
+          logging:
+            payloads: true
+          route:
+            paths:
+              - /v1/gpt-5-6
+            protocols:
+              - http
+              - https
+            strip_path: true
+
+    policies:
+      - ref: acme-ai-gateway-ai-sanitizer
+        ai_gateway: !ref acme-ai-gateway#id
+        name: ai-sanitizer
+        display_name: AI Sanitizer
+        type: ai-sanitizer
+        global: true
+        enabled: true
+        config:
+          host: pii-sanitizer
+          port: 8080
+          scheme: http
+          sanitization_mode: INPUT
+          anonymize:
+            - all
+          # 検知しても弾かず、プレースホルダに置き換えて LLM へ通す
+          block_if_detected: false
+          recover_redacted: false
+      - ref: acme-ai-gateway-opentelemetry
+        ai_gateway: !ref acme-ai-gateway#id
+        name: opentelemetry
+        display_name: OpenTelemetry
+        type: opentelemetry
+        global: true
+        enabled: true
+        config:
+          traces_endpoint: http://otel-lgtm:4318/v1/traces
+          # logs_endpoint が運ぶのは Kong 内部のエラーログだけ。
+          # アクセスログはプラグイン内の別エクスポータで、これを設定しないと出ない。
+          # 平坦な access_logs_endpoint は非推奨なのでレコード側に書く
+          logs_endpoint: http://otel-lgtm:4318/v1/logs
+          access_logs:
+            endpoint: http://otel-lgtm:4318/v1/logs
+          # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
+          # Prometheus プラグインは使わない
+          metrics:
+            endpoint: http://otel-lgtm:4318/v1/metrics
+            push_interval: 15
+            enable_request_metrics: true
+            enable_latency_metrics: true
+            enable_bandwidth_metrics: true
+            enable_upstream_health_metrics: true
+            enable_consumer_attribute: true
+            enable_ai_metrics: true
+          resource_attributes:
+            service.name: acme-ai-gateway
+
+    data_plane_certificates:
+      - ref: acme-ai-gateway-cert
+        ai_gateway: !ref acme-ai-gateway#id
+        title: Cluster Certificate
+        description: Cluster certificate for acme-ai-gateway
+        cert: !file ../.certs/cluster.crt

@@ -221,6 +221,7 @@ class AiSpec(Strict):
     embedding_model: str = "text-embedding-3-large"
     prompt_guard: PromptGuardMode = PromptGuardMode.NONE
     prompt_compressor: bool = False
+    pii_sanitizer: bool = False
 
 
 class LdapUser(Strict):
@@ -471,6 +472,17 @@ class EnvSpec(Strict):
                 "（generator が ai-prompt-compressor を書く経路は config/kongctl.yaml の policies だけで、"
                 "kong.yaml 側には出していません）。"
                 "gateway: ai-gateway-v2 にするか、ai.prompt_compressor を外してください。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_pii_sanitizer_needs_the_v2_data_plane(self):
+        if self.ai.pii_sanitizer and self.gateway is not Gateway.AI_GATEWAY_V2:
+            raise ValueError(
+                "ai.pii_sanitizer は ai-gateway-v2 でだけ使えます"
+                "（generator が ai-sanitizer を書く経路は config/kongctl.yaml の policies だけで、"
+                "kong.yaml 側には出していません）。"
+                "gateway: ai-gateway-v2 にするか、ai.pii_sanitizer を外してください。"
             )
         return self
 

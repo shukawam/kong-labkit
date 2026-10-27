@@ -1,0 +1,90 @@
+x-default: &default
+  networks:
+    - kong-network
+  restart: on-failure
+
+# 過去に踏んだ罠。expressions でないと新しいルータ構文のルートが動かず、
+# TRUSTED_IPS / REAL_IP を外すと X-Forwarded-For が上流で信用されず元クライアント IP を失う
+x-kong-hardening: &kong-hardening
+  KONG_ROUTER_FLAVOR: expressions
+  KONG_TRUSTED_IPS: 0.0.0.0/0
+  KONG_REAL_IP_HEADER: X-Forwarded-For
+  KONG_REAL_IP_RECURSIVE: "on"
+
+networks:
+  kong-network:
+
+services:
+  kong:
+    <<: *default
+    container_name: kong
+    image: kong/kong-ai-gateway:2.0.3
+    ports:
+      - 8000:8000
+      - 8100:8100
+    environment:
+      <<: *kong-hardening
+      KONG_ROLE: data_plane
+      KONG_DATABASE: "off"
+      KONG_VITALS: "off"
+      KONG_CLUSTER_MTLS: pki
+      KONG_CLUSTER_CONTROL_PLANE: ${CONTROL_PLANE_ID:-}.us.cp.konghq.com:443
+      KONG_CLUSTER_SERVER_NAME: ${CONTROL_PLANE_ID:-}.us.cp.konghq.com
+      KONG_CLUSTER_TELEMETRY_ENDPOINT: ${CONTROL_PLANE_ID:-}.us.tp.konghq.com:443
+      KONG_CLUSTER_TELEMETRY_SERVER_NAME: ${CONTROL_PLANE_ID:-}.us.tp.konghq.com
+      KONG_CLUSTER_CERT: /etc/kong/cluster-certs/cluster.crt
+      KONG_CLUSTER_CERT_KEY: /etc/kong/cluster-certs/cluster.key
+      KONG_LUA_SSL_TRUSTED_CERTIFICATE: system
+      KONG_KONNECT_MODE: "on"
+      KONG_CLUSTER_DP_LABELS: type:docker-macOsArmOS
+      KONG_STATUS_LISTEN: 0.0.0.0:8100
+      # debug は telemetry keepalive を毎秒吐き、クラスタリングの実エラーが埋もれる
+      KONG_LOG_LEVEL: info
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_TRACING_INSTRUMENTATIONS: all
+      KONG_TRACING_SAMPLING_RATE: "1.0"
+    volumes:
+      - .certs:/etc/kong/cluster-certs
+    depends_on:
+      pii-sanitizer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+  pii-sanitizer:
+    <<: *default
+    container_name: pii-sanitizer
+    build: ./build/pii-sanitizer
+    environment:
+      GUNICORN_WORKERS: "1"
+    healthcheck:
+      # イメージに curl が無いので python でポートだけ見る
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8080), 3).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # spaCy の lg モデルを 2 言語分読み込むまで待つ
+      start_period: 180s
+  otel-lgtm:
+    <<: *default
+    container_name: otel-lgtm
+    image: grafana/otel-lgtm:0.25.0
+    ports:
+      - 3000:3000
+      - 4317:4317
+      - 4318:4318
+    # Kong のアクセスログ 1 件が構造化メタデータ 156 個を持ち、Loki の既定上限 128 を超えて
+    # 400 になる。OTLP は全か無かなので、そのバッチに同梱された内部ログまで丸ごと捨てられる
+    environment:
+      LOKI_EXTRA_ARGS: -limits.max-structured-metadata-entries-count=256
+    # provisioning ディレクトリごと差し替えると同梱の RED metrics ダッシュボードが消えるので、
+    # プロバイダ定義とダッシュボード置き場だけを足す。置き場が conf/provisioning の外にあると
+    # Grafana の permitted_provisioning_paths に弾かれる
+    volumes:
+      - ./config/otel-lgtm/otelcol-config.yaml:/otel-lgtm/otelcol-config.yaml:ro
+      - ./config/grafana/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/kong.yaml:ro
+      - ./config/grafana/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards/kong:ro

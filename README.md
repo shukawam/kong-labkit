@@ -51,6 +51,7 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 | `aigw-v2-konnect-prompt-guard.yaml` | ai-prompt-guard を観測モードで掛ける |
 | `aigw-v2-konnect-bedrock.yaml` | モデルプロバイダを Amazon Bedrock にする |
 | `aigw-v2-konnect-prompt-compressor.yaml` | ai-prompt-compressor を掛け、圧縮サービスを同梱する |
+| `aigw-v2-konnect-pii-sanitizer.yaml` | ai-sanitizer を掛け、ja/en 対応の PII サニタイザを手元ビルドして同梱する |
 | `aigw-v1-konnect-lldap.yaml` | lldap を IdP として同梱する |
 | `aigw-v1-konnect-vault.yaml` | 秘匿情報のバックエンドを Vault にする |
 | `apigw-self-managed-keycloak.yaml` | Keycloak を IdP として同梱する |
@@ -71,6 +72,7 @@ minimal からの差分が 1 テーマに絞られた応用例もあります。
 | `ai.embedding_model` | 文字列 | `text-embedding-3-large` | 次元数は `context.py` の表で解決する |
 | `ai.prompt_guard` | `none` / `observe` / `block` | `none` | `ai-prompt-guard` を全ルートに掛ける。AI Gateway 専用。`observe` は `ai-gateway-v2` のみ |
 | `ai.prompt_compressor` | 真偽値 | `false` | `ai-prompt-compressor` を bedrock 以外の model に掛け、LLMLingua の圧縮サービス（Cloudsmith の私有イメージ、要 `docker login`）を同梱する。`ai-gateway-v2` のみ |
+| `ai.pii_sanitizer` | 真偽値 | `false` | `ai-sanitizer` を全ルートに掛け、個人情報をマスクして通す（弾かない）。Cloudsmith の日本語版 PII イメージに英語モデルを足した Dockerfile を `build/pii-sanitizer/` に出し、compose が手元ビルドする（要 `docker login`）。`ai-gateway-v2` のみ |
 | `idp.type` | `keycloak` / `entra-id` / `ldap` / `none` | `none` | `keycloak` は `idp.realm` が必須。`ldap` は lldap を同梱し `ai-gateway-v2` とは併用不可 |
 | `idp.users[]` | `name` / `email` / `password` / `groups[]` | `tester` 1 名 | `ldap` のときだけ。グループは `users[].groups` から導出。`email` は `<name>@example.com`、`password` は `<name>-password` が既定 |
 | `cache.type` | `redis` / `redis-stack` / `none` | `none` | |
@@ -121,6 +123,8 @@ Service/Route は各 1 個、固定名 `upstream`、`path_handling: v0` で生�
 `ai.prompt_guard: observe` は `ai-gateway-v2` でしか使えません。検知しても通す `continue_on_detection` が `kong-gateway:3.16` の `ai-prompt-guard` に存在せず、v1 では必ずブロックになるためです。v1 で掛けたいときは `block` を指定してください。
 
 `ai.prompt_compressor` は `ai-gateway-v2` でしか使えません。generator が `ai-prompt-compressor` を書く経路は `config/kongctl.yaml` の `policies` だけで、`kong.yaml` 側には出していないためです。
+
+`ai.pii_sanitizer` も同じ理由で `ai-gateway-v2` でしか使えません。
 
 `ai.prompt_guard` は `api-gateway` では使えません。`ai-prompt-guard` は LLM リクエストの本文を検査するプラグインですが、`api-gateway` の upstream は LLM ではなく、検査する相手が居ません。
 

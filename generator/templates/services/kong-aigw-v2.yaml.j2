@@ -31,10 +31,16 @@ kong:
 {% endif %}
   volumes:
     - .certs:/etc/kong/cluster-certs
-{% if prompt_compressor.enabled %}
+{% if prompt_compressor.enabled or pii_sanitizer.enabled %}
   depends_on:
+{% if prompt_compressor.enabled %}
     {{ prompt_compressor.host }}:
       condition: service_healthy
+{% endif %}
+{% if pii_sanitizer.enabled %}
+    {{ pii_sanitizer.host }}:
+      condition: service_healthy
+{% endif %}
 {% endif %}
   healthcheck:
     test: ["CMD", "kong", "health"]

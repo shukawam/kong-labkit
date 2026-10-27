@@ -142,7 +142,7 @@ ai_gateways:
             strip_path: true
 {% endfor %}
 {% endfor %}
-{% if prompt_guard.enabled or prompt_compressor.enabled or otel.enabled %}
+{% if prompt_guard.enabled or prompt_compressor.enabled or pii_sanitizer.enabled or otel.enabled %}
 
     policies:
 {% if prompt_guard.enabled %}
@@ -191,6 +191,25 @@ ai_gateways:
           keepalive_timeout: {{ prompt_compressor.keepalive_timeout_ms }}
           log_text_data: true
           stop_on_error: false
+{% endif %}
+{% if pii_sanitizer.enabled %}
+      - ref: {{ kong.cp_name }}-ai-sanitizer
+        ai_gateway: !ref {{ kong.cp_name }}#id
+        name: ai-sanitizer
+        display_name: AI Sanitizer
+        type: ai-sanitizer
+        global: true
+        enabled: true
+        config:
+          host: {{ pii_sanitizer.host }}
+          port: {{ pii_sanitizer.port }}
+          scheme: http
+          sanitization_mode: INPUT
+          anonymize:
+            - all
+          # 検知しても弾かず、プレースホルダに置き換えて LLM へ通す
+          block_if_detected: false
+          recover_redacted: false
 {% endif %}
 {% if otel.enabled %}
       - ref: {{ kong.cp_name }}-opentelemetry

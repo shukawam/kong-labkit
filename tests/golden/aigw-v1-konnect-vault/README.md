@@ -15,6 +15,7 @@
 | 秘匿情報 | HashiCorp Vault |
 | Prompt Guard | なし |
 | Prompt Compressor | なし |
+| PII Sanitizer | なし |
 
 ## 前提
 
