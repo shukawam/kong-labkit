@@ -15,6 +15,7 @@
 | 秘匿情報 | 環境変数 |
 | Prompt Guard | observe |
 | Prompt Compressor | なし |
+| PII Sanitizer | なし |
 
 ## 前提
 

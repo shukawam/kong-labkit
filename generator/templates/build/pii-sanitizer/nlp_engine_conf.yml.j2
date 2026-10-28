@@ -1,0 +1,6 @@
+nlp_engine_name: spacy
+models:
+{% for lang, model in pii_sanitizer.languages %}
+  - lang_code: {{ lang }}
+    model_name: {{ model }}
+{% endfor %}

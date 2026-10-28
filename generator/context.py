@@ -141,6 +141,8 @@ KONG_IMAGES = {
 LLDAP_IMAGE = "lldap/lldap:v0.6.3-alpine"
 # Cloudsmith の私有レジストリ。Kong Support からトークンをもらって docker login しないと pull できない
 COMPRESSOR_IMAGE = "docker.cloudsmith.io/kong/ai-compress/service:v0.0.5"
+# 日本語版は ja_core_news_lg しか同梱しない（v0.3.1-ja で実測）ので、英語 PII を拾うには en モデルを足した自前イメージをビルドする
+PII_SANITIZER_BASE_IMAGE = "kong/ai-pii-service:v0.3.1-ja"
 
 CACHE_IMAGES = {
     CacheType.REDIS: "redis:8.0.2",
@@ -270,6 +272,17 @@ class PromptCompressorCtx:
 
 
 @dataclass(frozen=True)
+class PiiSanitizerCtx:
+    enabled: bool
+    base_image: str
+    build_dir: str
+    host: str
+    port: int
+    # (lang_code, spaCy モデル名)
+    languages: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
 class CacheCtx:
     enabled: bool
     type: CacheType
@@ -362,6 +375,7 @@ class Ctx:
     semantic: SemanticCtx
     prompt_guard: PromptGuardCtx
     prompt_compressor: PromptCompressorCtx
+    pii_sanitizer: PiiSanitizerCtx
     certs: CertsCtx
     deck: DeckCtx
     secrets: "SecretsCtx"
@@ -726,6 +740,8 @@ def _build_services(spec: EnvSpec) -> list[str]:
         services.append("pgvector")
     if spec.ai.prompt_compressor:
         services.append("ai-compressor")
+    if spec.ai.pii_sanitizer:
+        services.append("pii-sanitizer")
     if spec.idp.type is IdpType.KEYCLOAK:
         services.append("keycloak")
     if spec.idp.type is IdpType.LDAP:
@@ -913,6 +929,17 @@ def _build_prompt_compressor(spec: EnvSpec) -> PromptCompressorCtx:
     )
 
 
+def _build_pii_sanitizer(spec: EnvSpec) -> PiiSanitizerCtx:
+    return PiiSanitizerCtx(
+        enabled=spec.ai.pii_sanitizer,
+        base_image=PII_SANITIZER_BASE_IMAGE,
+        build_dir="build/pii-sanitizer",
+        host="pii-sanitizer",
+        port=8080,
+        languages=(("ja", "ja_core_news_lg"), ("en", "en_core_web_lg")),
+    )
+
+
 def build_context(spec: EnvSpec) -> Ctx:
     ports = allocate_ports(spec)
     kong = _build_kong(spec)
@@ -931,6 +958,7 @@ def build_context(spec: EnvSpec) -> Ctx:
         semantic=_build_semantic(spec),
         prompt_guard=_build_prompt_guard(spec),
         prompt_compressor=_build_prompt_compressor(spec),
+        pii_sanitizer=_build_pii_sanitizer(spec),
         certs=_build_certs(spec, kong),
         deck=deck,
         secrets=_build_secrets(spec, refs),

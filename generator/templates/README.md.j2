@@ -15,6 +15,7 @@
 | 秘匿情報 | {{ 'HashiCorp Vault' if secrets.enabled else '環境変数' }} |
 | Prompt Guard | {{ spec.ai.prompt_guard.value if prompt_guard.enabled else 'なし' }} |
 | Prompt Compressor | {{ '有効' if prompt_compressor.enabled else 'なし' }} |
+| PII Sanitizer | {{ '有効' if pii_sanitizer.enabled else 'なし' }} |
 
 ## 前提
 
@@ -184,6 +185,18 @@ Vault の UI は http://localhost:{{ ports.vault }} で、トークンは `.env`
 `{{ prompt_compressor.host }}` は CPU で推論します（Docker Desktop on Apple Silicon では mps が使えず、`LLMLINGUA_DEVICE_MAP: auto` だと起動時に落ちます）。長いプロンプトでは圧縮に数秒〜十数秒かかるので、`timeout` は {{ prompt_compressor.timeout_ms // 1000 }} 秒にしてあります。Data Plane はこのコンテナが healthy になってから起動します。
 
 確かめるには、`/v1/<model>/chat/completions` に 100 トークンを超える長い `user` メッセージを投げ、Grafana か `docker compose logs kong` で入力トークン数が減っていることを見てください（`log_text_data: true` なので圧縮前後の本文もログに出ます）。
+{% endif %}
+{% if pii_sanitizer.enabled %}
+
+## PII Sanitizer
+
+`ai-sanitizer` を全ルートに掛け、LLM へ送る前に本文を `{{ pii_sanitizer.host }}` コンテナ（Presidio + spaCy）で検査し、個人情報をプレースホルダに置き換えてから転送します。`block_if_detected: false` なので検知しても弾きません。応答側のプレースホルダは元に戻しません（`recover_redacted: false`）。
+
+イメージは `{{ pii_sanitizer.base_image }}` をベースに `{{ pii_sanitizer.build_dir }}/Dockerfile` で手元ビルドします。日本語版イメージは日本語モデルしか持たないため、英語モデルを追加し `nlp_engine_conf.yml` で {% for lang, model in pii_sanitizer.languages %}{{ lang }}（`{{ model }}`）{% if not loop.last %}と {% endif %}{% endfor %}の両方を読み込ませています。ベースイメージは Docker Hub の公開イメージなので login は要りません。初回ビルドは英語モデルのダウンロードで数分かかります。
+
+spaCy の lg モデルを 2 言語分読み込むため起動に時間がかかり、メモリも数 GB 使います。Data Plane はこのコンテナが healthy になってから起動します。
+
+確かめるには、`/v1/<model>/chat/completions` に氏名・電話番号・メールアドレスを含む `user` メッセージを日本語と英語で投げ、`docker compose logs kong` で LLM へ渡った本文がプレースホルダになっていることを見てください。
 {% endif %}
 {% if idp.ldap %}
 
