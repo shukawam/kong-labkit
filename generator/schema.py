@@ -80,6 +80,13 @@ class PromptGuardMode(StrEnum):
     BLOCK = "block"
 
 
+class AzureService(StrEnum):
+    # deployment ベースの旧 API 面。日付付き api_version を要求し、Microsoft は v1 API への移行を推奨している
+    AZURE_OPENAI = "azure-openai"
+    # Foundry の v1 API 面（/openai/v1）。api_version 不要で、target 名がそのまま上流のモデル名になる
+    AZURE_FOUNDRY = "azure-foundry"
+
+
 class AuthType(StrEnum):
     API_KEY = "api-key"
     MANAGED_IDENTITY = "managed-identity"
@@ -211,7 +218,35 @@ class Provider(Strict):
     instance: str | None = None
     region: str | None = None
     auth: AuthType = AuthType.API_KEY
+    # azure 専用。未指定は Kong 側の既定（azure-openai）に任せる
+    service: AzureService | None = None
     models: list[Model] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_service(self):
+        if self.service is None:
+            return self
+        if self.type is not ProviderType.AZURE:
+            raise ValueError(
+                "ai.providers[].service は type: azure のときだけ指定できます"
+                f"（いまは type: {self.type.value} で、この値はどこにも出ません）。"
+            )
+        if self.service is AzureService.AZURE_FOUNDRY:
+            if not self.instance:
+                raise ValueError(
+                    "service: azure-foundry には instance（Foundry のリソース名）が必要です"
+                    "（上流ホスト <instance>.services.ai.azure.com の素になります）。"
+                )
+            for model in self.models:
+                for field in ("deployment_id", "api_version"):
+                    if getattr(model, field) is not None:
+                        raise ValueError(
+                            f"service: azure-foundry では models[].{field} は使えません"
+                            "（v1 API はデプロイメントのパスも日付付き api-version も持たず、"
+                            "モデル名を本文の model で渡します）。"
+                            "上流のデプロイメント名は models[].model_id に書いてください。"
+                        )
+        return self
 
 
 class AiSpec(Strict):
@@ -350,6 +385,19 @@ class EnvSpec(Strict):
                 "自前の Control Plane に接続する構成が存在しません）。"
                 "control_plane: konnect にするか、gateway: ai-gateway-v1 にしてください。"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_azure_foundry_is_v2_only(self):
+        if self.gateway is Gateway.AI_GATEWAY_V2:
+            return self
+        for provider in self.ai.providers:
+            if provider.service is AzureService.AZURE_FOUNDRY:
+                raise ValueError(
+                    "service: azure-foundry は ai-gateway-v2 でだけ使えます"
+                    "（v1 の ai-proxy-advanced には Foundry の v1 API を選ぶ設定が無く、"
+                    "azure_deployment_id ベースのパスしか組み立てられません）。"
+                )
         return self
 
     @model_validator(mode="after")

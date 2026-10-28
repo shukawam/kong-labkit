@@ -6,7 +6,7 @@ from click.testing import CliRunner
 
 from generator.gen import main
 from generator.render import render_all
-from tests.conftest import AZURE_PROVIDER, ctx_for, load_kongctl
+from tests.conftest import AZURE_FOUNDRY_PROVIDER, AZURE_PROVIDER, ctx_for, load_kongctl
 
 SEMANTIC = {
     "customer": "acme",
@@ -125,6 +125,22 @@ def test_model_target_carries_deployment_id_and_api_version():
     assert target["provider"] == "azure"
     assert target["config"]["deployment_id"] == "gpt-5.6"
     assert target["config"]["api_version"] == "2024-12-01-preview"
+
+
+def test_azure_foundry_provider_selects_the_v1_surface():
+    doc = kongctl_of(ctx_for(gateway="ai-gateway-v2", ai={"providers": [AZURE_FOUNDRY_PROVIDER]}))
+    config = doc["ai_gateways"][0]["model_providers"][0]["config"]
+    assert config["service"] == "azure-foundry"
+    assert config["foundry"] == {"resource": "acme-foundry"}
+    assert "instance" not in config
+    assert config["auth"]["headers"][0]["name"] == "api-key"
+
+
+def test_azure_foundry_target_is_the_bare_model_id():
+    doc = kongctl_of(ctx_for(gateway="ai-gateway-v2", ai={"providers": [AZURE_FOUNDRY_PROVIDER]}))
+    target = doc["ai_gateways"][0]["models"][0]["targets"][0]
+    assert target["name"] == "gpt-5.6"
+    assert target["config"] == {"type": "azure"}
 
 
 def test_no_balancer_without_semantic_features():

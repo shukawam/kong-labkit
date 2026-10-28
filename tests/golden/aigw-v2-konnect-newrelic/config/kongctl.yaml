@@ -15,7 +15,9 @@ ai_gateways:
         type: azure
         display_name: azure
         config:
-          instance: acme-foundry
+          service: azure-foundry
+          foundry:
+            resource: acme-foundry
           auth:
             type: basic
             headers:
@@ -34,13 +36,11 @@ ai_gateways:
         formats:
           - type: openai
         targets:
-          - name: gpt-5-6
+          - name: gpt-5.6
             provider: azure
             weight: 100
             config:
               type: azure
-              deployment_id: gpt-5.6
-              api_version: 2024-12-01-preview
         config:
           model:
             name_header: true
