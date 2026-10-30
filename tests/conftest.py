@@ -15,6 +15,14 @@ AZURE_PROVIDER = {
     ],
 }
 
+AZURE_FOUNDRY_PROVIDER = {
+    "type": "azure",
+    "service": "azure-foundry",
+    "instance": "acme-foundry",
+    "auth": "api-key",
+    "models": [{"name": "gpt-5-6", "model_id": "gpt-5.6"}],
+}
+
 
 def ctx_for(**overrides) -> Ctx:
     data = {"customer": "acme", "gateway": "api-gateway", **overrides}

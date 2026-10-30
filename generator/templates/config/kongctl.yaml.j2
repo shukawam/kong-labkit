@@ -32,7 +32,11 @@ ai_gateways:
         type: {{ provider.type.value }}
         display_name: {{ provider.type.value }}
         config:
-{% if provider.instance %}
+{% if provider.service == 'azure-foundry' %}
+          service: azure-foundry
+          foundry:
+            resource: {{ provider.instance }}
+{% elif provider.instance %}
           instance: {{ provider.instance }}
 {% endif %}
 {% if provider.type.value == 'azure' and provider.auth.value == 'managed-identity' %}

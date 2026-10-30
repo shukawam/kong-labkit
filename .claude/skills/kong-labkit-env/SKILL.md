@@ -29,6 +29,7 @@ description: Use when someone describes a Kong verification environment in natur
 |---|---|
 | `customer` | namespace と CP 名の素。LDAP では `dc=<値>,dc=local` の base DN にもなる。→ §書く前に確かめる |
 | `ai.providers[].instance` | Azure Foundry の実リソース名。起動して疎通するまで誤りが出ない |
+| `ai.providers[].service` | Azure だけ。`azure-foundry` なら v1 API（`<instance>.services.ai.azure.com/openai/v1`、`api_version` 不要）、未指定なら deployment ベースの旧 API 面で日付付き `api_version` が要る。新規は `azure-foundry` を勧める |
 | `ai.providers[].models[].name` / `deployment_id` | 実在しないモデルでも生成は成功する |
 | `idp.realm` | issuer URL と `realm-export.json` の両方に入る |
 | `idp.users[].groups` | LDAP の group DN と Kong の Consumer 名になる |
@@ -97,7 +98,7 @@ description: Use when someone describes a Kong verification environment in natur
 - **ポートは固定**: ホスト側ポートは `generator/context.py` の `PREFERRED_PORTS` から決まり、顧客ごとには振り直されない。2 つの環境を**同時に起動することはできない**。
 - **埋め込みの出どころ**: v1 は `ai.providers` の**先頭**のプロバイダから埋め込み認証を取る。v2 は**モデルごとにそのモデルの provider** で解決するので、プロバイダが複数あるなら**全部**に `ai.embedding_model` と同名のデプロイが要る（`deployment_id` は付かない）。
 - **vectordb の選び方**: 指定が無ければ `redis-stack`（`cache.type: redis-stack` とセットでコンテナ 1 つに収まる）。キャッシュを Redis で持ちたくないなら `pgvector`。
-- **v2 のモデル名**: `name` がそのまま ref とルートパス `/v1/<name>` になる。ドットやコロンを入れない（Azure は `name: gpt-5-6` + `deployment_id: gpt-5.6`、Bedrock は `name: claude-sonnet-4-5` + `model_id: apac.anthropic.claude-sonnet-4-5-20250929-v1:0` のように上流の ID は別キーに書く）。v2 は provider の ref が type 名なので、同じ type を 2 つ並べると衝突する。
+- **v2 のモデル名**: `name` がそのまま ref とルートパス `/v1/<name>` になる。ドットやコロンを入れない（Azure は `service: azure-foundry` なら `name: gpt-5-6` + `model_id: gpt-5.6`、旧 API 面なら `name: gpt-5-6` + `deployment_id: gpt-5.6` + `api_version`、Bedrock は `name: claude-sonnet-4-5` + `model_id: apac.anthropic.claude-sonnet-4-5-20250929-v1:0` のように上流の ID は別キーに書く）。v2 は provider の ref が type 名なので、同じ type を 2 つ並べると衝突する。
 
 ## 検証
 

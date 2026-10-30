@@ -6,6 +6,7 @@ import yaml
 from pydantic import ValidationError
 
 from generator.schema import (
+    AzureService,
     ControlPlane,
     EnvSpec,
     Gateway,
@@ -15,6 +16,8 @@ from generator.schema import (
     UpstreamType,
     load_spec,
 )
+
+from tests.conftest import AZURE_PROVIDER
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -250,3 +253,58 @@ def test_vault_backend_accepts_managed_identity_when_the_idp_has_a_secret():
         secrets={"backend": "vault"},
     )
     assert spec.secrets.backend is SecretsBackend.VAULT
+
+
+def test_azure_foundry_accepts_model_id():
+    provider = {
+        "type": "azure",
+        "service": "azure-foundry",
+        "instance": "acme-foundry",
+        "models": [{"name": "gpt-5-6", "model_id": "gpt-5.6"}],
+    }
+    spec = spec_from(gateway="ai-gateway-v2", ai={"providers": [provider]})
+    assert spec.ai.providers[0].service is AzureService.AZURE_FOUNDRY
+
+
+def test_azure_service_defaults_to_unset():
+    spec = spec_from(gateway="ai-gateway-v2", ai={"providers": [AZURE_PROVIDER]})
+    assert spec.ai.providers[0].service is None
+
+
+@pytest.mark.parametrize("field", ["deployment_id", "api_version"])
+def test_azure_foundry_rejects_deployment_fields(field):
+    provider = {
+        "type": "azure",
+        "service": "azure-foundry",
+        "instance": "acme-foundry",
+        "models": [{"name": "gpt-5-6", field: "x"}],
+    }
+    with pytest.raises(ValidationError, match=field):
+        spec_from(gateway="ai-gateway-v2", ai={"providers": [provider]})
+
+
+def test_azure_foundry_requires_instance():
+    provider = {
+        "type": "azure",
+        "service": "azure-foundry",
+        "models": [{"name": "gpt-5-6", "model_id": "gpt-5.6"}],
+    }
+    with pytest.raises(ValidationError, match="instance"):
+        spec_from(gateway="ai-gateway-v2", ai={"providers": [provider]})
+
+
+def test_service_is_rejected_for_non_azure_providers():
+    provider = {"type": "openai", "service": "azure-foundry", "models": [{"name": "gpt-4o"}]}
+    with pytest.raises(ValidationError, match="type: azure"):
+        spec_from(gateway="ai-gateway-v2", ai={"providers": [provider]})
+
+
+def test_azure_foundry_requires_ai_gateway_v2():
+    provider = {
+        "type": "azure",
+        "service": "azure-foundry",
+        "instance": "acme-foundry",
+        "models": [{"name": "gpt-5-6", "model_id": "gpt-5.6"}],
+    }
+    with pytest.raises(ValidationError, match="ai-gateway-v2"):
+        spec_from(gateway="ai-gateway-v1", ai={"providers": [provider]})
