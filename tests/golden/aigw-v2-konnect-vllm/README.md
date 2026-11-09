@@ -87,7 +87,7 @@ brew tap vllm-project/vllm-metal https://github.com/vllm-project/vllm-metal
 brew install vllm-project/vllm-metal/vllm-metal
 ```
 
-ホストで動かすモデルの PID とログは `.vllm/`（git 管理外）に置きます。vllm-metal は `--gpu-memory-utilization` を指定しないと、Mac の統合メモリの 9 割を KV キャッシュに取りにいきます。複数モデルを並べるときは `env.yaml` の `serve.args` で小さくしてください。
+ホストで動かすモデルの PID とログは `.vllm/`（git 管理外）に置きます。vllm-metal の `--gpu-memory-utilization`（既定 0.92）は、Metal に使えるメモリのうち重み・作業領域・KV キャッシュの合計に充てる割合です。既定のまま複数モデルを並べると取り合いになるので、`env.yaml` の `serve.args` で下げてください。下げすぎると `kv_budget` が負になって起動しないので、`mise run vllm:logs <モデル名>` のエラーに出る `model_memory` と `overhead` の合計を上回る値にします。
 
 vLLM CPU コンテナ（`vllm/vllm-openai-cpu:v0.33.0-arm64`）は compose のサービスで、`mise run up` で Kong と一緒に起動します。vllm-metal が扱えないモデル（ModernBERT の分類ヘッドを持つ reranker など）をこちらで動かします。
 
