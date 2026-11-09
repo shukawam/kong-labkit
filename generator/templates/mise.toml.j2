@@ -220,7 +220,7 @@ for target in{% for model in local_llm.models %} {{ model.name }}:{{ model.port 
   port=${target##*:}
   for i in $(seq 1 300); do
     if curl -sf -o /dev/null "http://127.0.0.1:$port/v1/models"; then
-      echo "$name: 応答あり（:$port）"
+      echo "${name}: 応答あり（:${port}）"
       break
     fi
     pidfile="{{ local_llm.state_dir }}/$name.pid"
