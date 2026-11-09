@@ -24,7 +24,9 @@ def test_mise_is_valid_toml_with_expected_tasks():
 
 def test_mise_loads_dotenv():
     doc = tomllib.loads(render_all(ctx_for())["mise.toml"])
-    assert doc["env"]["mise"]["file"] == ".env"
+    # env.mise.file は mise 2026.12.0 で削除予定で、2026.10 時点でも全タスクに deprecated 警告が出る
+    assert doc["env"]["_"]["file"] == ".env"
+    assert "mise" not in doc["env"]
 
 
 def test_sync_uses_kongctl_for_konnect_ai_gateway_v2():

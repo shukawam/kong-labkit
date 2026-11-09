@@ -93,4 +93,4 @@ echo "smoke: OK"
 '''
 
 [env]
-mise.file = ".env"
+_.file = ".env"
