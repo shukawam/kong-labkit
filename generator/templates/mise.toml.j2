@@ -176,8 +176,9 @@ for name in{% for key in access.keys %} {{ key.env_var }}{% endfor %}; do
     mv "$tmp.next" "$tmp"
     filled=$((filled + 1))
   elif ! grep -q "^${name}=" "$tmp"; then
-    echo ".env に ${name} の行がありません。${name}=\"\" を追記してから再実行してください。" >&2
-    exit 1
+    # --force の再生成は .env を上書きしないので、後から足した Consumer のキーは行ごとここで足す
+    printf '%s="%s"\n' "$name" "$(openssl rand -hex 24)" >> "$tmp"
+    filled=$((filled + 1))
   fi
 done
 chmod 600 "$tmp"

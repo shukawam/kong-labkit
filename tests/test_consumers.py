@@ -179,6 +179,20 @@ def test_keys_task_fills_only_empty_keys_without_printing_them():
     assert "echo \"$value" not in run and "echo $value" not in run
 
 
+def test_keys_task_appends_lines_that_a_forced_regeneration_could_not_add(tmp_path):
+    import subprocess
+
+    run = tasks_of(v2())["keys"]["run"]
+    env = tmp_path / ".env"
+    env.write_text('KONNECT_PAT="pat"\nAI_CONSUMER_KEY_DEVELOPER="keep"\n', encoding="utf-8")
+    subprocess.run(["bash", "-c", run], cwd=tmp_path, check=True, capture_output=True)
+    lines = dict(line.split("=", 1) for line in env.read_text(encoding="utf-8").splitlines())
+    assert lines["KONNECT_PAT"] == '"pat"'
+    assert lines["AI_CONSUMER_KEY_DEVELOPER"] == '"keep"'
+    assert len(lines["AI_CONSUMER_KEY_RESEARCHER"].strip('"')) == 48
+    assert len(lines["AI_CONSUMER_KEY_RESEARCHER_SHORT"].strip('"')) == 48
+
+
 def test_setup_generates_keys_before_sync():
     run = tasks_of(v2())["setup"]["run"]
     assert run.index("mise run keys") < run.index("kongctl sync")
