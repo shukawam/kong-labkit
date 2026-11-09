@@ -23,6 +23,12 @@ ai_gateways:
     name: {{ kong.cp_name }}
     display_name: {{ kong.cp_name }}
     deployment_type: hybrid
+{% if kong.min_runtime_version %}
+    # 2.2 の DP は CP と AI Gateway の版が一致しないと設定の同期を拒む（2.3 で major.minor 一致に緩和）。
+    # 既定の自動昇格を残すと、作成時の最新 GA や接続した DP 次第で最低版が上がって戻せなくなる
+    min_runtime_version: '{{ kong.min_runtime_version }}'
+    runtime_auto_upgrade: false
+{% endif %}
 
     model_providers:
 {% for provider in spec.ai.providers %}

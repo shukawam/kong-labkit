@@ -168,6 +168,8 @@ class KongCtx:
     konnect_telemetry_domain: str | None
     konnect_api_url: str | None
     dp_labels: str
+    # v2 の ai_gateways[].min_runtime_version。None なら Konnect の既定（作成時点の最新 GA）に任せる
+    min_runtime_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -388,9 +390,16 @@ class Ctx:
 def _build_kong(spec: EnvSpec) -> KongCtx:
     konnect = spec.control_plane is ControlPlane.KONNECT
     suffix = "ai-gateway" if spec.is_ai else "gateway"
+    image = KONG_IMAGES[spec.gateway]
+    min_runtime_version = None
+    if spec.gateway_version:
+        image = image.split(":")[0] + ":" + spec.gateway_version
+        if spec.gateway is Gateway.AI_GATEWAY_V2:
+            min_runtime_version = ".".join(spec.gateway_version.split(".")[:2])
     return KongCtx(
-        image=KONG_IMAGES[spec.gateway],
-        cp_name=f"{spec.konnect_name or spec.customer}-{suffix}",
+        image=image,
+        cp_name=spec.konnect_cp_name or f"{spec.konnect_name or spec.customer}-{suffix}",
+        min_runtime_version=min_runtime_version,
         konnect_domain=f"{spec.region}.cp.konghq.com" if konnect else None,
         konnect_telemetry_domain=f"{spec.region}.tp.konghq.com" if konnect else None,
         konnect_api_url=f"https://{spec.region}.api.konghq.com" if konnect else None,

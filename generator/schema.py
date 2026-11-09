@@ -309,6 +309,10 @@ class EnvSpec(Strict):
     control_plane: ControlPlane = ControlPlane.KONNECT
     # Konnect 上の見せ方だけを customer から切り離すための上書き
     konnect_name: str | None = None
+    # konnect_name + 接尾辞では表せない名前（bluesky-ai-gateway-v2 など）をそのまま使う
+    konnect_cp_name: str | None = None
+    # 顧客の DP に合わせて image を固定する。v2 では Konnect 側の min_runtime_version も揃える
+    gateway_version: str | None = None
     region: str = "us"
     ai: AiSpec = Field(default_factory=AiSpec)
     idp: IdpSpec = Field(default_factory=IdpSpec)
@@ -441,6 +445,40 @@ class EnvSpec(Strict):
             raise ValueError(
                 "konnect_name は control_plane: konnect のときだけ指定できます"
                 "（self-managed には Konnect の Control Plane が存在せず、指定しても効きません）。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_konnect_cp_name(self):
+        if self.konnect_cp_name is None:
+            return self
+        if self.control_plane is not ControlPlane.KONNECT:
+            raise ValueError(
+                "konnect_cp_name は control_plane: konnect のときだけ指定できます"
+                "（self-managed には Konnect の Control Plane が存在せず、指定しても効きません）。"
+            )
+        if self.konnect_name:
+            raise ValueError(
+                "konnect_cp_name と konnect_name は同時に指定できません"
+                "（konnect_cp_name は名前をそのまま使い、konnect_name は接尾辞を付けるので、どちらが効くか曖昧になります）。"
+                "どちらか一方にしてください。"
+            )
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", self.konnect_cp_name):
+            raise ValueError(
+                "konnect_cp_name は英小文字・数字・ハイフンだけで、先頭は英小文字か数字にしてください"
+                "（kongctl の ref とクラスタ証明書の CN にそのまま入ります）。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_gateway_version(self):
+        # 浮動タグ（2.2 や latest）は再生成のたびに中身が変わり、CP の min_runtime_version とずれる
+        if self.gateway_version is not None and not re.fullmatch(
+            r"\d+\.\d+\.\d+(\.\d+)?(-[0-9A-Za-z.]+)?", self.gateway_version
+        ):
+            raise ValueError(
+                "gateway_version はパッチまで含む Docker タグにしてください（例: 2.2.0、3.14.0.0）。"
+                "2.2 や latest のような浮動タグは、再生成のたびに DP の版が変わるので受け付けません。"
             )
         return self
 
