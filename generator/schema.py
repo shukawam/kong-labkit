@@ -343,14 +343,113 @@ class Provider(Strict):
         return self
 
 
+_SAFE_NAME = r"[a-z0-9][a-z0-9-]*"
+
+
+def _safe_name(value: str, what: str) -> str:
+    if not re.fullmatch(_SAFE_NAME, value):
+        raise ValueError(
+            f"{what} は英小文字・数字・ハイフンだけで、先頭は英小文字か数字にしてください"
+            "（kongctl の ref と .env の変数名の素になります）。"
+        )
+    return value
+
+
+class ConsumerKey(Strict):
+    name: str
+    # Konnect に渡すのは作成時点からの残り秒数。0 は無期限なので受け付けない
+    ttl: int | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value):
+        return _safe_name(value, "ai.consumers[].keys[].name")
+
+    @field_validator("ttl")
+    @classmethod
+    def _check_ttl(cls, value):
+        if value is not None and value <= 0:
+            raise ValueError(
+                "ai.consumers[].keys[].ttl は 1 以上の秒数にしてください"
+                "（Konnect では 0 が無期限を意味するので、期限を付けないなら ttl を書かないでください）。"
+            )
+        return value
+
+
+class AiConsumer(Strict):
+    name: str
+    groups: list[str] = Field(default_factory=list)
+    keys: list[ConsumerKey] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value):
+        return _safe_name(value, "ai.consumers[].name")
+
+    @model_validator(mode="after")
+    def _check_keys(self):
+        if not self.keys:
+            raise ValueError(
+                f"ai.consumers[{self.name}].keys に API キーを 1 つ以上書いてください"
+                "（認証は key-auth なので、キーの無い Consumer はどのモデルも呼べません）。"
+            )
+        return self
+
+
+class RateLimit(Strict):
+    tokens: int = Field(gt=0)
+    window: int = Field(default=60, gt=0)
+
+
+class AiConsumerGroup(Strict):
+    name: str
+    rate_limit: RateLimit | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value):
+        return _safe_name(value, "ai.consumer_groups[].name")
+
+
 class AiSpec(Strict):
     providers: list[Provider] = Field(default_factory=list)
+    # 書くと全モデルに key-auth が掛かる。キーの値は .env の AI_CONSUMER_KEY_<キー名>
+    consumers: list[AiConsumer] = Field(default_factory=list)
+    consumer_groups: list[AiConsumerGroup] = Field(default_factory=list)
     semantic_cache: bool = False
     semantic_routing: bool = False
     embedding_model: str = "text-embedding-3-large"
     prompt_guard: PromptGuardMode = PromptGuardMode.NONE
     prompt_compressor: bool = False
     pii_sanitizer: bool = False
+
+    @model_validator(mode="after")
+    def _check_consumers(self):
+        def duplicates(names):
+            seen, dup = set(), []
+            for name in names:
+                if name in seen:
+                    dup.append(name)
+                seen.add(name)
+            return dup
+
+        if dup := duplicates(c.name for c in self.consumers):
+            raise ValueError(f"ai.consumers の name が重複しています: {', '.join(dup)}")
+        if dup := duplicates(g.name for g in self.consumer_groups):
+            raise ValueError(f"ai.consumer_groups の name が重複しています: {', '.join(dup)}")
+        if dup := duplicates(k.name for c in self.consumers for k in c.keys):
+            raise ValueError(
+                f"ai.consumers[].keys の name が重複しています: {', '.join(dup)}"
+                "（キー名がそのまま .env の AI_CONSUMER_KEY_<キー名> になるので、Consumer をまたいでも一意にしてください）。"
+            )
+        declared = {g.name for g in self.consumer_groups}
+        for consumer in self.consumers:
+            if missing := [g for g in consumer.groups if g not in declared]:
+                raise ValueError(
+                    f"ai.consumers[{consumer.name}].groups の {', '.join(missing)} が "
+                    "ai.consumer_groups にありません。グループを先に宣言してください。"
+                )
+        return self
 
 
 class LdapUser(Strict):
@@ -683,6 +782,16 @@ class EnvSpec(Strict):
                     "kong.yaml 側には出していません）。"
                     "gateway: ai-gateway-v2 にしてください。"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _check_consumers_need_the_v2_data_plane(self):
+        if (self.ai.consumers or self.ai.consumer_groups) and self.gateway is not Gateway.AI_GATEWAY_V2:
+            raise ValueError(
+                "ai.consumers / ai.consumer_groups は ai-gateway-v2 でだけ使えます"
+                "（AI Consumer は AI Gateway v2 のエンティティで、v1 / api-gateway の Consumer は "
+                "idp.type: ldap の users から作ります）。"
+            )
         return self
 
     @model_validator(mode="after")

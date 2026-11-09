@@ -287,6 +287,57 @@ class PiiSanitizerCtx:
 
 
 @dataclass(frozen=True)
+class ConsumerKeyCtx:
+    name: str
+    ref: str
+    env_var: str
+    ttl: int | None
+
+
+@dataclass(frozen=True)
+class ConsumerCtx:
+    name: str
+    ref: str
+    groups: tuple[str, ...]
+    keys: tuple[ConsumerKeyCtx, ...]
+
+
+@dataclass(frozen=True)
+class ConsumerGroupCtx:
+    name: str
+    ref: str
+    members: tuple[str, ...]
+    # ai-rate-limiting-advanced を掛けないグループは None
+    policy_name: str | None
+    policy_ref: str | None
+    tokens: int | None
+    window: int | None
+
+
+@dataclass(frozen=True)
+class AccessCtx:
+    enabled: bool
+    auth_strategy_name: str
+    auth_strategy_ref: str
+    key_name: str
+    consumers: tuple[ConsumerCtx, ...]
+    groups: tuple[ConsumerGroupCtx, ...]
+
+    @property
+    def keys(self) -> tuple[ConsumerKeyCtx, ...]:
+        return tuple(key for consumer in self.consumers for key in consumer.keys)
+
+    @property
+    def smoke_key(self) -> ConsumerKeyCtx:
+        # 期限付きのキーで smoke を組むと、期限後に smoke だけが落ちる
+        return next((k for k in self.keys if k.ttl is None), self.keys[0])
+
+    @property
+    def rate_limited_groups(self) -> tuple[ConsumerGroupCtx, ...]:
+        return tuple(g for g in self.groups if g.policy_name)
+
+
+@dataclass(frozen=True)
 class CacheCtx:
     enabled: bool
     type: CacheType
@@ -380,6 +431,7 @@ class Ctx:
     prompt_guard: PromptGuardCtx
     prompt_compressor: PromptCompressorCtx
     pii_sanitizer: PiiSanitizerCtx
+    access: AccessCtx
     certs: CertsCtx
     deck: DeckCtx
     secrets: "SecretsCtx"
@@ -812,6 +864,11 @@ def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
             if provider.type is ProviderType.BEDROCK and provider.auth is AuthType.SESSION_TOKEN:
                 env["AWS_SESSION_TOKEN"] = ""
 
+    # 値は mise run keys が乱数で埋める。生成時に入れると golden が毎回変わる
+    for consumer in spec.ai.consumers:
+        for key in consumer.keys:
+            env[consumer_key_env(key.name)] = ""
+
     if spec.idp.type is IdpType.KEYCLOAK:
         env["KEYCLOAK_ADMIN"] = "admin"
         env["KEYCLOAK_ADMIN_PASSWORD"] = "admin"
@@ -965,6 +1022,52 @@ def _build_pii_sanitizer(spec: EnvSpec) -> PiiSanitizerCtx:
     )
 
 
+def consumer_key_env(key_name: str) -> str:
+    return "AI_CONSUMER_KEY_" + key_name.upper().replace("-", "_")
+
+
+def _build_access(spec: EnvSpec, kong: KongCtx) -> AccessCtx:
+    cp = kong.cp_name
+    consumers = tuple(
+        ConsumerCtx(
+            name=c.name,
+            ref=f"{cp}-consumer-{c.name}",
+            groups=tuple(c.groups),
+            keys=tuple(
+                ConsumerKeyCtx(
+                    name=k.name, ref=f"{cp}-credential-{k.name}", env_var=consumer_key_env(k.name), ttl=k.ttl
+                )
+                for k in c.keys
+            ),
+        )
+        for c in spec.ai.consumers
+    )
+    groups = []
+    for group in spec.ai.consumer_groups:
+        limit = group.rate_limit
+        policy_name = f"ai-rate-limiting-advanced-{group.name}" if limit else None
+        groups.append(
+            ConsumerGroupCtx(
+                name=group.name,
+                ref=f"{cp}-consumer-group-{group.name}",
+                members=tuple(c.name for c in consumers if group.name in c.groups),
+                policy_name=policy_name,
+                policy_ref=f"{cp}-{policy_name}" if policy_name else None,
+                tokens=limit.tokens if limit else None,
+                window=limit.window if limit else None,
+            )
+        )
+    return AccessCtx(
+        enabled=bool(consumers),
+        auth_strategy_name="key-auth",
+        auth_strategy_ref=f"{cp}-key-auth",
+        # key-auth の既定。OpenAI SDK の Authorization: Bearer は key-auth が読まないので、SDK からは default_headers で渡す
+        key_name="apikey",
+        consumers=consumers,
+        groups=tuple(groups),
+    )
+
+
 def build_context(spec: EnvSpec) -> Ctx:
     ports = allocate_ports(spec)
     kong = _build_kong(spec)
@@ -984,6 +1087,7 @@ def build_context(spec: EnvSpec) -> Ctx:
         prompt_guard=_build_prompt_guard(spec),
         prompt_compressor=_build_prompt_compressor(spec),
         pii_sanitizer=_build_pii_sanitizer(spec),
+        access=_build_access(spec, kong),
         certs=_build_certs(spec, kong),
         deck=deck,
         secrets=_build_secrets(spec, refs),

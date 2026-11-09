@@ -49,6 +49,9 @@ class KongctlLoader(yaml.SafeLoader):
 
 
 def _keep_tag(loader, node):
+    if isinstance(node, yaml.MappingNode):
+        # !secret {source: !env X} のように中身がマッピングのタグがある
+        return {"__tag__": node.tag, "value": loader.construct_mapping(node, deep=True)}
     return {"__tag__": node.tag, "value": loader.construct_scalar(node)}
 
 

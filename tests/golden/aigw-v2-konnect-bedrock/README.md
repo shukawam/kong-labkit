@@ -16,6 +16,7 @@
 | Prompt Guard | なし |
 | Prompt Compressor | なし |
 | PII Sanitizer | なし |
+| AI Consumer | なし（認証なし） |
 
 ## 前提
 

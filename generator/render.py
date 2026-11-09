@@ -33,6 +33,7 @@ def template_vars(ctx: Ctx) -> dict:
         "prompt_guard": ctx.prompt_guard,
         "prompt_compressor": ctx.prompt_compressor,
         "pii_sanitizer": ctx.pii_sanitizer,
+        "access": ctx.access,
         "certs": ctx.certs,
         "deck": ctx.deck,
         "secrets": ctx.secrets,

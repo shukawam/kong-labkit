@@ -16,6 +16,12 @@
 | Prompt Guard | {{ spec.ai.prompt_guard.value if prompt_guard.enabled else 'なし' }} |
 | Prompt Compressor | {{ '有効' if prompt_compressor.enabled else 'なし' }} |
 | PII Sanitizer | {{ '有効' if pii_sanitizer.enabled else 'なし' }} |
+{% if spec.gateway.value == 'ai-gateway-v2' %}
+| AI Consumer | {{ (access.consumers | length ~ ' 人（key-auth）') if access.enabled else 'なし（認証なし）' }} |
+{% endif %}
+{% if spec.gateway_version %}
+| Data Plane | `{{ kong.image }}`{% if kong.min_runtime_version %}（Konnect 側の min_runtime_version も {{ kong.min_runtime_version }} に固定）{% endif %} |
+{% endif %}
 
 ## 前提
 
@@ -197,6 +203,43 @@ Vault の UI は http://localhost:{{ ports.vault }} で、トークンは `.env`
 spaCy の lg モデルを 2 言語分読み込むため起動に時間がかかり、メモリも数 GB 使います。Data Plane はこのコンテナが healthy になってから起動します。
 
 確かめるには、`/v1/<model>/chat/completions` に氏名・電話番号・メールアドレスを含む `user` メッセージを日本語と英語で投げ、`docker compose logs kong` で LLM へ渡った本文がプレースホルダになっていることを見てください。
+{% endif %}
+{% if access.enabled %}
+
+## AI Consumer と API キー
+
+全モデルに key-auth が掛かっていて、`{{ access.key_name }}` ヘッダでキーを送ります。キーの値は `.env` の `AI_CONSUMER_KEY_<キー名>` にあり、`mise run setup`（単体なら `mise run keys`）が空のものだけを乱数で埋めます。値を変えたら `mise run sync` で Konnect に書き込んでください。キーは Konnect 側で書き込み専用なので、`.env` を失うと取り出せません。
+
+| Consumer | グループ | キー | `.env` の変数 | 期限 |
+|---|---|---|---|---|
+{% for consumer in access.consumers %}
+{% for key in consumer.keys %}
+| {{ consumer.name }} | {{ consumer.groups | join('、') if consumer.groups else 'なし' }} | {{ key.name }} | `{{ key.env_var }}` | {{ ('作成から ' ~ key.ttl ~ ' 秒') if key.ttl else 'なし' }} |
+{% endfor %}
+{% endfor %}
+{% if access.rate_limited_groups %}
+
+`ai-rate-limiting-advanced` をグループ単位で掛けています。数えるのは入力と出力の合計トークン（`total_tokens`）で、窓は固定です。上限は応答を受け取った後に加算されるので、上限をまたぐ 1 回は通り、次のリクエストから 429 になります。
+
+| グループ | 上限 |
+|---|---|
+{% for group in access.rate_limited_groups %}
+| {{ group.name }} | {{ group.window }} 秒あたり {{ group.tokens }} トークン |
+{% endfor %}
+{% endif %}
+
+```bash
+curl http://localhost:{{ ports.proxy }}/v1/<model>/chat/completions \
+  -H "{{ access.key_name }}: $AI_CONSUMER_KEY_{{ access.smoke_key.name | upper | replace('-', '_') }}" -H 'Content-Type: application/json' \
+  -d '{"model":"<model>","messages":[{"role":"user","content":"ping"}]}'
+```
+
+OpenAI SDK の `api_key` は `Authorization: Bearer` で送られますが、key-auth はこのヘッダを読みません。SDK から呼ぶときは `api_key` にダミーを入れ、`default_headers={"{{ access.key_name }}": ...}` でキーを渡してください。
+
+期限付きのキーの `ttl` は「作成時点からの残り秒数」で、Konnect の credential には更新 API がありません。期限はデータプレーンがリクエストのたびに判定し、切れたキーは 401 になります。
+
+Consumer 別の利用量は Konnect の Observability > Explorer で見られます。From を「LLM usage」、by を「AI gateway consumer」（グループ単位なら「AI gateway consumer group」）にすると、Consumer 別のトークン数とコストが出ます。{% if otel.backend.value == 'otel-lgtm' %}Grafana の Consumer 別パネルは `kong.auth.consumer.name`（AI Consumer の名前）で集計しています。AI Consumer Group は OTel の属性に出ないので、Grafana ではグループ単位に畳めません。{% endif %}
+
 {% endif %}
 {% if idp.ldap %}
 
