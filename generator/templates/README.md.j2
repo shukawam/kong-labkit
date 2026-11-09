@@ -272,7 +272,7 @@ curl http://localhost:{{ ports.proxy }}/v1/<model>/chat/completions \
 
 OpenAI SDK の `api_key` は `Authorization: Bearer` で送られますが、key-auth はこのヘッダを読みません。SDK から呼ぶときは `api_key` にダミーを入れ、`default_headers={"{{ access.key_name }}": ...}` でキーを渡してください。
 
-期限付きのキーの `ttl` は「作成時点からの残り秒数」で、Konnect の credential には更新 API がありません。期限はデータプレーンがリクエストのたびに判定し、切れたキーは 401 になります。
+期限付きのキーの `ttl` は「作成時点からの残り秒数」で、Konnect の credential には更新 API がありません。期限はデータプレーンがリクエストのたびに判定し、切れたキーは 401 になります。ただし Konnect は `ttl` を残り秒数で返し、kongctl はそれを宣言値との差分とみなすので、**`mise run sync` のたびに期限付きのキーを同じ値で作り直します**。期限前なら期限が全量に戻り、期限後なら復活します。期限を守らせたいキーは、期限が来たら `env.yaml` から外して再生成してください。
 
 Consumer 別の利用量は Konnect の Observability > Explorer で見られます。From を「LLM usage」、by を「AI gateway consumer」（グループ単位なら「AI gateway consumer group」）にすると、Consumer 別のトークン数とコストが出ます。{% if otel.backend.value == 'otel-lgtm' %}Grafana の Consumer 別パネルは `kong.auth.consumer.name`（AI Consumer の名前）で集計しています。AI Consumer Group は OTel の属性に出ないので、Grafana ではグループ単位に畳めません。{% endif %}
 

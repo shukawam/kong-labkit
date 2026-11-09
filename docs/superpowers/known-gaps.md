@@ -42,6 +42,22 @@ Kong はフィールドの値全体が `{vault://...}` である場合にのみ�
 
 kongctl 1.20.2 で、`ai_gateway_model_provider` を `--write-secrets` 無しで更新する（`display_name` だけ変える等）と、Konnect 側の `config.auth.headers` から `api-key` の値が消え、Azure が 401 を返す。`!env` でも `!secret {source: !env}` でも同じ。以後 `diff` は headers の差分を毎回報告するが、更新しても戻らない。復旧は provider と依存する model を一度消して作り直すか、`--write-secrets` 付きで sync する。生成物の `sync` / `diff` / `setup` はこれを避けるため常に `--write-secrets` を付けている（書き込み専用の秘密は比較されないので、.env だけ変えた更新が走らない問題も同時に解消する）。`access_key_id` / `session_token` のような平坦な秘密フィールドではこの消失は起きない。
 
+### TTL 付きの API キーは `mise run sync` のたびに作り直される
+
+`ai.consumers[].keys[].ttl` は kongctl の credential の `ttl` にそのまま渡している。Konnect の GET は `ttl` を「残り秒数」で返し、kongctl 1.26.0 はこれを宣言値との差分とみなすので、**期限前の sync は credential を削除して同じ値で作り直す（期限が全量に戻る）**。期限が来ると Konnect から credential が消え、DP は 401 を返すが、**次の sync で同じ値のキーが新しい TTL で作られて復活する**。credential に更新 API が無いので、宣言的に管理する限り防げない。期限を守らせたいキーは kongctl の外（API や UI）で発行するか、期限後は `env.yaml` から外して再生成する必要がある。実測の経緯は aozora-bank-v2 の `docs/verification.md` にある。
+
+### v2 の `type: openai` + `auth: api-key` が kongctl 1.26.0 で読み込めない
+
+`kongctl.yaml.j2` は OpenAI 本家向けに `auth: {type: bearer, token: !env OPENAI_API_KEY}` を出すが、kongctl 1.26.0 のスキーマでは openai provider の `auth.type` は `basic` だけで、`unknown field 'token'` で読み込み時に失敗する（diff で確認、sync はしていない）。`basic` の `headers` に `Authorization: Bearer <key>` を入れる形が候補だが、`!env` に接頭辞を付ける手段が無いので、`.env` に `Bearer ` 込みの値を持たせるなどの設計が要る。セルフホスト向けの `auth: none` は `basic` だけを出すので影響しない。
+
+### passthrough の model は Konnect Analytics で空になる
+
+`formats: [passthrough]` の AI Model への要求は、Konnect の llm_usage（Explorer）で AI gateway consumer とトークン数は付くが、AI gateway model が `empty` になる（2.2.0 の DP で実測）。Grafana 側は `gen_ai.request.model` に target 名が入る。
+
+### `serve` は Docker Desktop for Mac 前提
+
+`serve` の vLLM は `127.0.0.1` だけで待ち受け、DP コンテナからは `host.docker.internal` で届かせている。Docker Desktop は loopback 待ち受けにも届くが、Linux の Docker Engine の `host-gateway` はブリッジの IP を指すので届かない。`runtime: cpu` のイメージも arm64 タグ固定。
+
 ### 同梱の dev Vault は再起動で中身が消える
 
 `hashicorp/vault` を dev モードで動かしているためメモリ保持で、`docker compose restart vault` すると KV が空になる。`vault-bootstrap` の流し直しが必要。

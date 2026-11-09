@@ -98,7 +98,7 @@ ai_gateways:
             display_name: bob-temporary
             type: api-key
             api_key: !secret {source: !env AI_CONSUMER_KEY_BOB_TEMPORARY}
-            # 作成時点からの残り秒数。credential には更新 API が無い
+            # 作成時点からの残り秒数。Konnect は残り秒数を返すので、kongctl は sync のたびに作り直して期限を戻す
             ttl: 3600
 
     consumer_groups:

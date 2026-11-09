@@ -34,6 +34,9 @@ description: Use when someone describes a Kong verification environment in natur
 | `idp.realm` | issuer URL と `realm-export.json` の両方に入る |
 | `idp.users[].groups` | LDAP の group DN と Kong の Consumer 名になる |
 | `observability.newrelic.region` | EU アカウントで `us` のままだと 403 |
+| `ai.providers[].models[].upstream_url` | 顧客の vLLM / OpenAI 互換サーバの URL。`vllm` はパス（`/v1/chat/completions`）まで書く。間違っても sync は通り、呼んで初めて 404 / 502 になる |
+| `ai.consumers` / `ai.consumer_groups` | 利用者名・部署名・トークン上限は顧客の運用そのもの。名前が Konnect の Explorer と Grafana の集計軸になる |
+| `gateway_version` | 顧客の DP の版。省くと generator の既定（2.0.3）で、passthrough など 2.2 以降の機能が動かない |
 
 聞けないまま進めるときは `# TODO: <何を入れるか>` を付ける。ただし **TODO では守れないキーがある**。`idp.realm` は必須なので暫定値を入れるしかなく、`observability.newrelic.region` は既定値があるので TODO を付けても黙って US に送られる。どちらも暫定値がそのまま生成物に焼き込まれるので、**最後の報告で「これは推測した値」として列挙する**。YAML のコメントだけで済ませない。
 
@@ -52,6 +55,11 @@ description: Use when someone describes a Kong verification environment in natur
 | `ai.pii_sanitizer` × `ai-gateway-v2` 以外 | 同上 |
 | `semantic_cache` / `semantic_routing` × `vectordb.type: none` | vectordb が必須。`redis-stack` か `pgvector` |
 | `vectordb.type: redis-stack` × `cache.type` がそれ以外 | 素の redis に検索モジュールが無い。`cache.type: redis-stack` にするか vectordb を `pgvector` に |
+| `type: vllm` / `auth: none` / `models[].upstream_url` / `capabilities` / `formats` / `serve` × `ai-gateway-v2` 以外 | generator が v2 の AI Model にしか出さない |
+| `ai.consumers` / `ai.consumer_groups` × `ai-gateway-v2` 以外 | AI Consumer は v2 のエンティティ。v1 で利用者を分けるなら `idp.type: ldap` |
+| `type: vllm` × `capabilities` が `generate` 以外 | DP の vllm ドライバはチャットしか変換しない。Embedding は `type: openai` + `auth: none` + `upstream_url`、Rerank は `formats: [passthrough]` |
+| `capabilities: [rerank]` × `formats` が `[passthrough]` 以外 | OpenAI 形式に rerank が無い。passthrough にする |
+| `semantic_cache` / `semantic_routing` × `type: vllm` | 埋め込みを model と同じ provider で作るが vllm は embeddings を持たない |
 
 ## ユーザーに聞けないとき
 
@@ -72,6 +80,10 @@ description: Use when someone describes a Kong verification environment in natur
 | LDAP でグループごとに権限を変える | 出るのは `ldap-auth-advanced` だけ。グループ別の認可は生成されない |
 | Keycloak で `.env` の `KEYCLOAK_CLIENT_SECRET` を変える | `kong.yaml` と `realm-export.json` に実値が埋め込み済みで、`.env` 側は参照されない |
 | `ai-gateway-v1` に `upstream: httpbin` を明示 | ルートが出ないのに `mise run smoke` が叩くので必ず 404。既定のままにする |
+| v2 で `type: openai` + `auth: api-key`（OpenAI 本家） | kongctl 1.26.0 が `auth.token` を未知のフィールドとして読み込み時に弾く。sync まで進まない |
+| `keys[].ttl` の期限を守らせる | `mise run sync` のたびに kongctl が TTL 付きキーを作り直す。期限前なら延長、期限後なら同じ値で復活する |
+| OpenAI SDK の `api_key` でキーを渡す | SDK は `Authorization: Bearer` で送るが key-auth はこれを読まず 401。`default_headers={"apikey": ...}` で渡す |
+| passthrough の Rerank を Konnect Explorer でモデル別に見る | トークン数と Consumer は付くが、AI gateway model が空になる |
 
 ## 自然文 → キー
 
@@ -91,11 +103,20 @@ description: Use when someone describes a Kong verification environment in natur
 | 「New Relic に送りたい」 | `observability.backend: newrelic` + `newrelic.region`。traces/metrics/logs が全部行く（トレースだけには絞れない）。Grafana とダッシュボードは生成されなくなる |
 | 「Grafana で見たい」 | 既定の `otel-lgtm`。何も書かない |
 | 「コストを見たい」 | `models[].input_cost` / `output_cost`（100 万トークンあたり USD）。無いと常に 0 |
+| 「自社の vLLM」「OpenAI 互換のセルフホスト」 | チャットは `type: vllm` + `models[].upstream_url`（`.../v1/chat/completions` まで）。Embedding は `type: openai` + `auth: none` + `capabilities: [embeddings]` + `upstream_url`（`.../v1/embeddings`）。v2 は provider の ref が type 名なので、同じ vLLM でも Embedding だけ `openai` に分ける |
+| 「Rerank」「リランカー」 | `capabilities: [rerank]` + `formats: [passthrough]`（DP 2.2 以降なので `gateway_version` も）。passthrough は本文の `model` を書き換えないので、クライアントは上流の vLLM が知っている名前を送る |
+| 「手元で vLLM を動かしたい」「GPU サーバが無い」 | `models[].serve`。`runtime: metal` はホストの vllm-metal（brew）、`runtime: cpu` は compose の vLLM CPU コンテナ。ModernBERT の reranker のように vllm-metal が持たないモデルは `cpu`。`upstream_url` は `http://host.docker.internal:<port>/...` にする |
+| 「利用者ごとの API キー」「Keycloak までの暫定認証」 | `ai.consumers[].keys`。全モデルに key-auth（`apikey` ヘッダ）が掛かる。キーの値は `mise run setup` が `.env` に乱数で入れる |
+| 「部署ごとにトークン上限」 | `ai.consumer_groups[].rate_limit`（`tokens` / `window` 秒）。グループ単位の `ai-rate-limiting-advanced`（total_tokens、固定窓） |
+| 「期限付きのキー」 | `keys[].ttl`（秒）。ただし §検証は通るが動かないもの の通り sync のたびに作り直される |
+| 「先方と同じ DP の版で」 | `gateway_version`（パッチまで。例 `2.2.0`）。v2 は Konnect 側の `min_runtime_version` も揃う |
+| 「Konnect 上の名前を指定したい」 | 接尾辞込みでそのまま使うなら `konnect_cp_name`、接頭辞だけなら `konnect_name` |
 
 ## 書く前に確かめる
 
 - **`customer:` の重複**: 書く前に `ls customer/` で既存の値と重なっていないか確かめる。`control_plane: konnect` では `customer:` が kongctl の namespace になり、`mise run sync` は `kongctl sync --auto-approve` なので、**重なると既存環境の Konnect エンティティが削除対象に入る**。Konnect 上の表示名だけ揃えたいなら `konnect_name` で分ける（namespace は分かれたまま）。`self-managed` では sync が `deck gateway sync --kong-addr http://localhost:<admin>` なので削除は起きず、`konnect_name` も schema が弾く。代わりにファイル名ごと分ける。
-- **ポートは固定**: ホスト側ポートは `generator/context.py` の `PREFERRED_PORTS` から決まり、顧客ごとには振り直されない。2 つの環境を**同時に起動することはできない**。
+- **ポートは固定**: ホスト側ポートは `generator/context.py` の `PREFERRED_PORTS` から決まり、顧客ごとには振り直されない。2 つの環境を**同時に起動することはできない**。`serve` の待ち受けポート（`upstream_url` のポート）が Kong のポートと重なると生成時に弾かれる。
+- **`serve` のメモリ**: vllm-metal の `--gpu-memory-utilization`（既定 0.92）は重み・作業領域・KV キャッシュの合計の割合。複数モデルを並べるなら `serve.args` で下げる。下げすぎると `kv_budget` が負で起動しない（gemma-4-e2b-it-4bit は 0.2 で不足、0.3 で起動）。
 - **埋め込みの出どころ**: v1 は `ai.providers` の**先頭**のプロバイダから埋め込み認証を取る。v2 は**モデルごとにそのモデルの provider** で解決するので、プロバイダが複数あるなら**全部**に `ai.embedding_model` と同名のデプロイが要る（`deployment_id` は付かない）。
 - **vectordb の選び方**: 指定が無ければ `redis-stack`（`cache.type: redis-stack` とセットでコンテナ 1 つに収まる）。キャッシュを Redis で持ちたくないなら `pgvector`。
 - **v2 のモデル名**: `name` がそのまま ref とルートパス `/v1/<name>` になる。ドットやコロンを入れない（Azure は `service: azure-foundry` なら `name: gpt-5-6` + `model_id: gpt-5.6`、旧 API 面なら `name: gpt-5-6` + `deployment_id: gpt-5.6` + `api_version`、Bedrock は `name: claude-sonnet-4-5` + `model_id: apac.anthropic.claude-sonnet-4-5-20250929-v1:0` のように上流の ID は別キーに書く）。v2 は provider の ref が type 名なので、同じ type を 2 つ並べると衝突する。
