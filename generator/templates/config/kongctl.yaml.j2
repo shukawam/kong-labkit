@@ -45,7 +45,11 @@ ai_gateways:
 {% elif provider.instance %}
           instance: {{ provider.instance }}
 {% endif %}
-{% if provider.type.value == 'azure' and provider.auth.value == 'managed-identity' %}
+{% if provider.auth.value == 'none' %}
+          # auth は省けない。type だけ置けばヘッダを足さずに上流へ流す
+          auth:
+            type: basic
+{% elif provider.type.value == 'azure' and provider.auth.value == 'managed-identity' %}
           auth:
             type: azure
             use_managed_identity: true
@@ -90,14 +94,18 @@ ai_gateways:
         display_name: {{ model.name }}
         type: model
         enabled: true
-{% if prompt_compressor.enabled and provider.type.value != 'bedrock' %}
+{% if prompt_compressor.enabled and provider.type.value != 'bedrock' and model.capabilities == ['generate'] and model.formats == ['openai'] %}
         policies:
           - ai-prompt-compressor
 {% endif %}
         capabilities:
-          - generate
+{% for capability in model.capabilities %}
+          - {{ capability.value }}
+{% endfor %}
         formats:
-          - type: openai
+{% for format in model.formats %}
+          - type: {{ format.value }}
+{% endfor %}
         targets:
           - name: {{ model.model_id or model.name }}
             provider: {{ provider.type.value }}
@@ -112,6 +120,9 @@ ai_gateways:
 {% endif %}
 {% if provider.region %}
               region: {{ provider.region }}
+{% endif %}
+{% if model.upstream_url %}
+              upstream_url: {{ model.upstream_url }}
 {% endif %}
         config:
           model:

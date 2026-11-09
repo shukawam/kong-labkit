@@ -1,5 +1,6 @@
 from base64 import b64encode
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from generator.schema import (
     AuthType,
@@ -170,6 +171,7 @@ class KongCtx:
     dp_labels: str
     # v2 の ai_gateways[].min_runtime_version。None なら Konnect の既定（作成時点の最新 GA）に任せる
     min_runtime_version: str | None = None
+    extra_hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -396,10 +398,20 @@ def _build_kong(spec: EnvSpec) -> KongCtx:
         image = image.split(":")[0] + ":" + spec.gateway_version
         if spec.gateway is Gateway.AI_GATEWAY_V2:
             min_runtime_version = ".".join(spec.gateway_version.split(".")[:2])
+    upstream_hosts = {
+        urlsplit(model.upstream_url).hostname
+        for provider in spec.ai.providers
+        for model in provider.models
+        if model.upstream_url
+    }
     return KongCtx(
         image=image,
         cp_name=spec.konnect_cp_name or f"{spec.konnect_name or spec.customer}-{suffix}",
         min_runtime_version=min_runtime_version,
+        # Docker Desktop は自前で解決するが、Linux の Docker Engine は host-gateway の明示が要る
+        extra_hosts=(
+            ("host.docker.internal:host-gateway",) if "host.docker.internal" in upstream_hosts else ()
+        ),
         konnect_domain=f"{spec.region}.cp.konghq.com" if konnect else None,
         konnect_telemetry_domain=f"{spec.region}.tp.konghq.com" if konnect else None,
         konnect_api_url=f"https://{spec.region}.api.konghq.com" if konnect else None,
@@ -786,6 +798,8 @@ def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
         env["KONG_LICENSE_DATA"] = ""
 
     for provider in spec.ai.providers:
+        if provider.auth is AuthType.NONE:
+            continue
         if provider.type is ProviderType.AZURE:
             if provider.auth is AuthType.API_KEY:
                 env["AZURE_OPENAI_API_KEY"] = ""
@@ -828,6 +842,8 @@ def _build_certs(spec: EnvSpec, kong: KongCtx) -> CertsCtx:
 
 def _build_provider_auth(provider, secrets: _SecretRefs) -> dict[str, str]:
     path = f"ai-{provider.type.value}"
+    if provider.auth is AuthType.NONE:
+        return {}
     if provider.type is ProviderType.AZURE:
         if provider.auth is AuthType.MANAGED_IDENTITY:
             return {

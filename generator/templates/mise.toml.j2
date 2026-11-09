@@ -155,10 +155,21 @@ fi
 curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:{{ ports.status }}/status
 {% for provider in spec.ai.providers %}
 {% for model in provider.models %}
+{% if 'rerank' in model.capabilities %}
+# passthrough は本文を書き換えないので、model は上流の vLLM が知っている名前で送る
+curl -sS -f -X POST http://localhost:{{ ports.proxy }}/v1/{{ model.name }}/rerank \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"{{ model.model_id or model.name }}","query":"ping","documents":["pong"]}' > /dev/null
+{% elif 'embeddings' in model.capabilities %}
+curl -sS -f -X POST http://localhost:{{ ports.proxy }}/v1/{{ model.name }}/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"{{ model.name }}","input":"ping"}' > /dev/null
+{% else %}
 # model は省けない。無いと AI Gateway が target を選べず ai-gateway.upstream.local の DNS 解決で 500 になる
 curl -sS -f -X POST http://localhost:{{ ports.proxy }}/v1/{{ model.name }}/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"{{ model.name }}","messages":[{"role":"user","content":"ping"}]}' > /dev/null
+{% endif %}
 {% endfor %}
 {% endfor %}
 {% elif idp.ldap %}

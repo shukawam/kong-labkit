@@ -72,6 +72,8 @@ class ProviderType(StrEnum):
     VERTEX = "vertex"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    # v2 専用。セルフホストの vLLM（OpenAI 互換）。Kong 側の対応はチャットだけ
+    VLLM = "vllm"
 
 
 class PromptGuardMode(StrEnum):
@@ -92,6 +94,20 @@ class AuthType(StrEnum):
     MANAGED_IDENTITY = "managed-identity"
     # bedrock 専用。STS の一時クレデンシャル（ASIA...）は session_token が無いと AWS が弾く
     SESSION_TOKEN = "session-token"
+    # openai / vllm 専用。認証なしのセルフホスト LLM
+    NONE = "none"
+
+
+class Capability(StrEnum):
+    GENERATE = "generate"
+    EMBEDDINGS = "embeddings"
+    RERANK = "rerank"
+
+
+class ModelFormat(StrEnum):
+    OPENAI = "openai"
+    # 本文を変換せずに上流へ流す。DP 2.2 以降。他の形式とは 1 つの model に同居できない
+    PASSTHROUGH = "passthrough"
 
 
 class Strict(BaseModel):
@@ -211,16 +227,94 @@ class Model(Strict):
     # 100 万トークンあたりの USD。ai-proxy-advanced の input_cost / output_cost にそのまま渡す
     input_cost: float | None = None
     output_cost: float | None = None
+    # セルフホスト向け。Kong はパスを足さずにこの URL へ投げるので、/v1/chat/completions まで書く
+    upstream_url: str | None = None
+    capabilities: list[Capability] = Field(default_factory=lambda: [Capability.GENERATE], min_length=1)
+    formats: list[ModelFormat] = Field(default_factory=lambda: [ModelFormat.OPENAI], min_length=1)
+
+    @field_validator("upstream_url")
+    @classmethod
+    def _check_upstream_url(cls, value):
+        if value is None:
+            return value
+        try:
+            return _upstream_url(value)
+        except ValueError as e:
+            raise ValueError(f"models[].upstream_url が不正です: {e}") from None
+
+    @model_validator(mode="after")
+    def _check_formats(self):
+        if ModelFormat.PASSTHROUGH in self.formats and len(set(self.formats)) > 1:
+            raise ValueError(
+                f"models[{self.name}].formats の passthrough は他の形式と同居できません"
+                "（Kong の ai-proxy-advanced が passthrough の target と変換ありの target の混在を拒みます）。"
+                "形式ごとに model を分けてください。"
+            )
+        if Capability.RERANK in self.capabilities and self.formats != [ModelFormat.PASSTHROUGH]:
+            raise ValueError(
+                f"models[{self.name}] の rerank は formats: [passthrough] でだけ使えます"
+                "（OpenAI 形式に rerank が無く、Kong が変換できるのは cohere / bedrock / gemini 形式だけです）。"
+            )
+        return self
+
+    @property
+    def is_default_shape(self) -> bool:
+        return (
+            self.upstream_url is None
+            and self.capabilities == [Capability.GENERATE]
+            and self.formats == [ModelFormat.OPENAI]
+        )
+
+
+_SELF_HOSTED = (ProviderType.OPENAI, ProviderType.VLLM)
 
 
 class Provider(Strict):
     type: ProviderType
     instance: str | None = None
     region: str | None = None
-    auth: AuthType = AuthType.API_KEY
+    # 未指定は type で決まる（vllm は none、それ以外は api-key）
+    auth: AuthType | None = None
     # azure 専用。未指定は Kong 側の既定（azure-openai）に任せる
     service: AzureService | None = None
     models: list[Model] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _resolve_auth(self):
+        if self.auth is None:
+            self.auth = AuthType.NONE if self.type is ProviderType.VLLM else AuthType.API_KEY
+        if self.auth is AuthType.NONE and self.type not in _SELF_HOSTED:
+            raise ValueError(
+                f"auth: none は type: openai / vllm でだけ使えます（いまは type: {self.type.value}）。"
+                "クラウドの LLM は資格情報なしでは通りません。"
+            )
+        if self.type is ProviderType.VLLM and self.auth is not AuthType.NONE:
+            raise ValueError(
+                f"type: vllm の auth: {self.auth.value} は未対応です"
+                "（vLLM の --api-key を Authorization ヘッダで渡す経路を generator が持っていません）。"
+                "auth を省略するか auth: none にしてください。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_vllm_models(self):
+        if self.type is not ProviderType.VLLM:
+            return self
+        for model in self.models:
+            if model.upstream_url is None:
+                raise ValueError(
+                    f"type: vllm の models[{model.name}] には upstream_url が必要です"
+                    "（vLLM には既定の接続先が無く、Kong は URL にパスを足さないので "
+                    "http://host.docker.internal:8001/v1/chat/completions のようにパスまで書きます）。"
+                )
+            if model.formats != [ModelFormat.PASSTHROUGH] and model.capabilities != [Capability.GENERATE]:
+                raise ValueError(
+                    f"type: vllm の models[{model.name}] は capabilities: [generate] だけにしてください"
+                    "（Kong の vllm ドライバはチャットしか変換しません）。"
+                    "Embedding は type: openai + auth: none + upstream_url で、"
+                    "Rerank は formats: [passthrough] で書けます。"
+                )
+        return self
 
     @model_validator(mode="after")
     def _check_service(self):
@@ -569,6 +663,36 @@ class EnvSpec(Strict):
                 "（generator が ai-sanitizer を書く経路は config/kongctl.yaml の policies だけで、"
                 "kong.yaml 側には出していません）。"
                 "gateway: ai-gateway-v2 にするか、ai.pii_sanitizer を外してください。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_self_hosted_needs_the_v2_data_plane(self):
+        if self.gateway is Gateway.AI_GATEWAY_V2:
+            return self
+        for provider in self.ai.providers:
+            if (
+                provider.type is ProviderType.VLLM
+                or provider.auth is AuthType.NONE
+                or not all(m.is_default_shape for m in provider.models)
+            ):
+                raise ValueError(
+                    "type: vllm、auth: none、models[] の upstream_url / capabilities / formats は "
+                    "ai-gateway-v2 でだけ使えます"
+                    "（generator がこれらを書く経路は config/kongctl.yaml の AI Model だけで、"
+                    "kong.yaml 側には出していません）。"
+                    "gateway: ai-gateway-v2 にしてください。"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _check_semantic_needs_a_provider_that_embeds(self):
+        semantic = self.ai.semantic_cache or self.ai.semantic_routing
+        if semantic and any(p.type is ProviderType.VLLM for p in self.ai.providers):
+            raise ValueError(
+                "ai.semantic_cache / ai.semantic_routing は type: vllm のプロバイダと併用できません"
+                "（semantic balancer は model と同じプロバイダで埋め込みを作りますが、"
+                "Kong の vllm ドライバは embeddings を持ちません）。"
             )
         return self
 
