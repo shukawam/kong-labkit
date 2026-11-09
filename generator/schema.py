@@ -104,6 +104,13 @@ class Capability(StrEnum):
     RERANK = "rerank"
 
 
+class ServeRuntime(StrEnum):
+    # ホスト上の vllm-metal（Apple Silicon の GPU）。brew で入れた vllm を mise が起動する
+    METAL = "metal"
+    # compose 上の vLLM CPU コンテナ（linux/arm64）。vllm-metal が持たないモデル（ModernBERT の reranker など）用
+    CPU = "cpu"
+
+
 class ModelFormat(StrEnum):
     OPENAI = "openai"
     # 本文を変換せずに上流へ流す。DP 2.2 以降。他の形式とは 1 つの model に同居できない
@@ -217,6 +224,28 @@ class CustomUpstreamSpec(Strict):
         return self
 
 
+# generator が upstream_url と target 名から決めるので、手で渡すと食い違う
+_SERVE_RESERVED_ARGS = ("--host", "--port", "--served-model-name")
+
+
+class ServeSpec(Strict):
+    runtime: ServeRuntime
+    # Hugging Face のリポジトリ。省略時は target 名（model_id か name）
+    model: str | None = None
+    args: list[str] = Field(default_factory=list)
+
+    @field_validator("args")
+    @classmethod
+    def _check_args(cls, value):
+        for arg in value:
+            if arg.split("=", 1)[0] in _SERVE_RESERVED_ARGS:
+                raise ValueError(
+                    f"serve.args に {arg.split('=', 1)[0]} は書けません"
+                    "（待ち受けは upstream_url のポート、公開名は target 名から generator が決めます）。"
+                )
+        return value
+
+
 class Model(Strict):
     name: str
     # v2 の targets[].name に渡す上流側のモデル ID。name は ref とルートパスになるので
@@ -231,6 +260,8 @@ class Model(Strict):
     upstream_url: str | None = None
     capabilities: list[Capability] = Field(default_factory=lambda: [Capability.GENERATE], min_length=1)
     formats: list[ModelFormat] = Field(default_factory=lambda: [ModelFormat.OPENAI], min_length=1)
+    # upstream_url の先を手元で起動する。ラボ用で、顧客側の vLLM の代わり
+    serve: ServeSpec | None = None
 
     @field_validator("upstream_url")
     @classmethod
@@ -257,10 +288,41 @@ class Model(Strict):
             )
         return self
 
+    @model_validator(mode="after")
+    def _check_serve(self):
+        if self.serve is None:
+            return self
+        if self.upstream_url is None:
+            raise ValueError(
+                f"models[{self.name}].serve には upstream_url が必要です"
+                "（起動するポートと、Kong からの接続先をこの URL から決めます）。"
+            )
+        parts = urlsplit(self.upstream_url)
+        if parts.hostname != "host.docker.internal":
+            raise ValueError(
+                f"models[{self.name}].serve を使うときは upstream_url のホストを host.docker.internal にしてください"
+                "（手元で起動した vLLM に Kong の DP コンテナから届く名前がこれだけです）。"
+            )
+        if parts.port is None:
+            raise ValueError(
+                f"models[{self.name}].serve を使うときは upstream_url にポートを明示してください"
+                "（vLLM の待ち受けポートになります。例: http://host.docker.internal:8001/v1/chat/completions）。"
+            )
+        return self
+
+    @property
+    def serve_port(self) -> int | None:
+        return urlsplit(self.upstream_url).port if self.serve and self.upstream_url else None
+
+    @property
+    def target_name(self) -> str:
+        return self.model_id or self.name
+
     @property
     def is_default_shape(self) -> bool:
         return (
-            self.upstream_url is None
+            self.serve is None
+            and self.upstream_url is None
             and self.capabilities == [Capability.GENERATE]
             and self.formats == [ModelFormat.OPENAI]
         )
@@ -441,6 +503,12 @@ class AiSpec(Strict):
             raise ValueError(
                 f"ai.consumers[].keys の name が重複しています: {', '.join(dup)}"
                 "（キー名がそのまま .env の AI_CONSUMER_KEY_<キー名> になるので、Consumer をまたいでも一意にしてください）。"
+            )
+        ports = [m.serve_port for p in self.providers for m in p.models if m.serve_port]
+        if dup := duplicates(ports):
+            raise ValueError(
+                f"models[].serve の待ち受けポートが重複しています: {', '.join(map(str, dup))}"
+                "（1 プロセスに 1 モデルなので、upstream_url のポートを分けてください）。"
             )
         declared = {g.name for g in self.consumer_groups}
         for consumer in self.consumers:

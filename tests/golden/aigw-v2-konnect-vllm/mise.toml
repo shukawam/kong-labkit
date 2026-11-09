@@ -1,0 +1,233 @@
+[tasks.up]
+description = "環境を起動する"
+run = '''
+set -euo pipefail
+docker compose up -d
+mise run vllm:up
+'''
+
+[tasks.down]
+description = "環境を停止する"
+run = """
+mise run vllm:down
+docker compose down
+"""
+
+[tasks.reset]
+description = "ボリュームごと作り直す"
+run = """
+docker compose down -v
+docker compose up -d
+"""
+
+[tasks.certs]
+description = "クラスタ証明書を再生成する"
+run = '''
+mkdir -p .certs
+openssl req -new -x509 -nodes -newkey rsa:2048 \
+  -subj "/CN=acme-ai-gateway/C=JP" \
+  -addext "subjectAltName=DNS:acme-ai-gateway" \
+  -keyout .certs/cluster.key -out .certs/cluster.crt -days 1095
+chmod 600 .certs/cluster.key
+echo "生成しました。mise run sync で .certs/cluster.crt を Konnect に登録し、mise run up で環境を起動してください。起動済みの場合は docker compose restart で証明書を読み直してください。"
+'''
+
+[tasks.setup]
+description = "証明書の用意から環境の起動までを通しで行う"
+run = '''
+set -euo pipefail
+
+
+
+if [ ! -f .certs/cluster.crt ]; then
+  mise run certs
+fi
+
+kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve --write-secrets
+# --columns はヘッダ 1 行と値 1 行を返すので、jq を足さずに最終行だけ取る
+endpoint=$(kongctl get konnect ai-gateway acme-ai-gateway --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --columns 'EP=.endpoints.configuration' | tail -n 1)
+cp_id=${endpoint#https://}
+cp_id=${cp_id%%.*}
+if [ -z "$cp_id" ]; then
+  echo "acme-ai-gateway のエンドポイントを取得できませんでした。mise run sync が成功しているか確認してください。" >&2
+  exit 1
+fi
+
+# .env には API キーも入っている。想定外の形なら追記せずに止める
+if ! grep -q '^CONTROL_PLANE_ID=' .env; then
+  echo ".env に CONTROL_PLANE_ID の行がありません。CONTROL_PLANE_ID=\"$cp_id\" を手で追記してください。" >&2
+  exit 1
+fi
+tmp=$(mktemp ./.env.XXXXXX)
+trap 'rm -f "$tmp"' EXIT
+sed 's|^CONTROL_PLANE_ID=.*|CONTROL_PLANE_ID="'"$cp_id"'"|' .env > "$tmp"
+mv "$tmp" .env
+trap - EXIT
+echo "CONTROL_PLANE_ID=$cp_id を .env に反映しました。"
+
+docker compose up -d
+mise run vllm:up
+
+echo "起動しました。mise run smoke で疎通を確認してください。"
+'''
+
+[tasks.sync]
+description = "宣言的設定を適用する"
+run = '''
+set -euo pipefail
+
+# kongctl は書き込み専用の秘密を比較しないので、.env だけ変えても --write-secrets 無しでは更新が走らない。
+# しかも --write-secrets 無しの更新は azure の headers[].value を消す（1.20.2 で実測）ので常に付ける
+kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --auto-approve --write-secrets'''
+
+[tasks.diff]
+description = "宣言的設定の差分を見る"
+run = '''
+set -euo pipefail
+
+kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url https://us.api.konghq.com --pat "$KONNECT_PAT" --write-secrets'''
+
+[tasks."vllm:up"]
+description = "ローカルの vLLM を起動し、全モデルが応答するまで待つ"
+run = '''
+set -euo pipefail
+mkdir -p .vllm
+if ! command -v vllm >/dev/null; then
+  echo "vllm が見つかりません。brew tap vllm-project/vllm-metal https://github.com/vllm-project/vllm-metal && brew install vllm-project/vllm-metal/vllm-metal で入れてください。" >&2
+  exit 1
+fi
+# 端末を閉じたときの SIGHUP で止まらないよう nohup で切り離す
+if curl -sf -o /dev/null http://127.0.0.1:8001/v1/models; then
+  echo "qwen3-5-0-8b: :8001 が既に応答しているので起動しません"
+else
+  nohup vllm serve mlx-community/Qwen3.5-0.8B-MLX-4bit --host 127.0.0.1 --port 8001 --served-model-name qwen3-5-0-8b --max-model-len 8192 --gpu-memory-utilization 0.2 > .vllm/qwen3-5-0-8b.log 2>&1 &
+  echo $! > .vllm/qwen3-5-0-8b.pid
+  echo "qwen3-5-0-8b: 起動しました（ログ: .vllm/qwen3-5-0-8b.log）"
+fi
+if curl -sf -o /dev/null http://127.0.0.1:8002/v1/models; then
+  echo "multilingual-e5-base: :8002 が既に応答しているので起動しません"
+else
+  nohup vllm serve intfloat/multilingual-e5-base --host 127.0.0.1 --port 8002 --served-model-name intfloat/multilingual-e5-base --runner pooling --max-model-len 512 --gpu-memory-utilization 0.05 > .vllm/multilingual-e5-base.log 2>&1 &
+  echo $! > .vllm/multilingual-e5-base.pid
+  echo "multilingual-e5-base: 起動しました（ログ: .vllm/multilingual-e5-base.log）"
+fi
+docker compose up -d vllm-bge-reranker-v2-m3
+# 初回は Hugging Face から重みを取るので、1 モデルあたり最大 10 分待つ
+for target in qwen3-5-0-8b:8001 bge-reranker-v2-m3:8003 multilingual-e5-base:8002; do
+  name=${target%%:*}
+  port=${target##*:}
+  for i in $(seq 1 300); do
+    if curl -sf -o /dev/null "http://127.0.0.1:$port/v1/models"; then
+      echo "$name: 応答あり（:$port）"
+      break
+    fi
+    pidfile=".vllm/$name.pid"
+    if [ -f "$pidfile" ] && ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+      echo "$name が起動中に終了しました。.vllm/$name.log を確認してください。" >&2
+      exit 1
+    fi
+    if [ "$i" = 300 ]; then
+      echo "$name が 10 分以内に応答しませんでした。mise run vllm:logs $name を確認してください。" >&2
+      exit 1
+    fi
+    sleep 2
+  done
+done
+'''
+
+[tasks."vllm:down"]
+description = "ローカルの vLLM を止める"
+run = '''
+set -uo pipefail
+pidfile=.vllm/qwen3-5-0-8b.pid
+if [ -f "$pidfile" ]; then
+  pid=$(cat "$pidfile")
+  # SIGTERM なら vLLM が EngineCore まで畳む。応答しないときだけ子ごと落とす
+  if kill "$pid" 2>/dev/null; then
+    for _ in $(seq 1 30); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      pkill -9 -P "$pid"
+      kill -9 "$pid"
+    fi
+  fi
+  rm -f "$pidfile"
+  echo "qwen3-5-0-8b: 停止しました"
+fi
+pidfile=.vllm/multilingual-e5-base.pid
+if [ -f "$pidfile" ]; then
+  pid=$(cat "$pidfile")
+  # SIGTERM なら vLLM が EngineCore まで畳む。応答しないときだけ子ごと落とす
+  if kill "$pid" 2>/dev/null; then
+    for _ in $(seq 1 30); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      pkill -9 -P "$pid"
+      kill -9 "$pid"
+    fi
+  fi
+  rm -f "$pidfile"
+  echo "multilingual-e5-base: 停止しました"
+fi
+docker compose stop vllm-bge-reranker-v2-m3
+'''
+
+[tasks."vllm:status"]
+description = "ローカルの vLLM の応答を確かめる"
+run = '''
+for target in qwen3-5-0-8b:8001:metal bge-reranker-v2-m3:8003:cpu multilingual-e5-base:8002:metal; do
+  IFS=: read -r name port runtime <<< "$target"
+  if curl -sf -o /dev/null "http://127.0.0.1:$port/v1/models"; then state=up; else state=down; fi
+  printf '%-32s %-6s :%-6s %s\n' "$name" "$runtime" "$port" "$state"
+done
+'''
+
+[tasks."vllm:logs"]
+description = "ローカルの vLLM のログを追う。モデル名を引数で渡せる"
+run = '''
+name='{{arg(name="model", default="")}}'
+case "$name" in
+  qwen3-5-0-8b) exec tail -n 100 -F .vllm/qwen3-5-0-8b.log ;;
+  multilingual-e5-base) exec tail -n 100 -F .vllm/multilingual-e5-base.log ;;
+  bge-reranker-v2-m3) exec docker compose logs -f --tail 100 vllm-bge-reranker-v2-m3 ;;
+  "")
+    docker compose logs -f --tail 20 vllm-bge-reranker-v2-m3 &
+    trap 'kill $!' EXIT
+    tail -n 20 -F .vllm/qwen3-5-0-8b.log .vllm/multilingual-e5-base.log
+    ;;
+  *)
+    echo "モデル名は qwen3-5-0-8b bge-reranker-v2-m3 multilingual-e5-base のどれかです。" >&2
+    exit 1
+    ;;
+esac
+'''
+
+[tasks.logs]
+description = "ログを追う。サービス名を引数で渡せる"
+run = 'docker compose logs -f {{arg(name="service", default="")}}'
+
+[tasks.smoke]
+description = "主要経路を叩いて疎通を確認する"
+run = '''
+set -e
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8100/status
+# model は省けない。無いと AI Gateway が target を選べず ai-gateway.upstream.local の DNS 解決で 500 になる
+curl -sS -f -X POST http://localhost:8000/v1/qwen3-5-0-8b/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"qwen3-5-0-8b","messages":[{"role":"user","content":"ping"}]}' > /dev/null
+# passthrough は本文を書き換えないので、model は上流の vLLM が知っている名前で送る
+curl -sS -f -X POST http://localhost:8000/v1/bge-reranker-v2-m3/rerank \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"BAAI/bge-reranker-v2-m3","query":"ping","documents":["pong"]}' > /dev/null
+curl -sS -f -X POST http://localhost:8000/v1/multilingual-e5-base/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"multilingual-e5-base","input":"ping"}' > /dev/null
+echo "smoke: OK"
+'''
+
+[env]
+_.file = ".env"

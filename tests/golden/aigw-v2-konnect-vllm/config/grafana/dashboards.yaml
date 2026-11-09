@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Kong
+    type: file
+    folder: Kong
+    allowUiUpdates: true
+    options:
+      # otel-lgtm の Grafana は conf/provisioning 配下しか provisioning パスとして許していない
+      path: conf/provisioning/dashboards/kong
+      foldersFromFilesStructure: false

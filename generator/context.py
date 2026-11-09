@@ -1,3 +1,4 @@
+import shlex
 from base64 import b64encode
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -17,6 +18,7 @@ from generator.schema import (
     ProviderType,
     PromptGuardMode,
     SecretsBackend,
+    ServeRuntime,
     UpstreamType,
     VectorDbType,
 )
@@ -144,6 +146,9 @@ LLDAP_IMAGE = "lldap/lldap:v0.6.3-alpine"
 COMPRESSOR_IMAGE = "docker.cloudsmith.io/kong/ai-compress/service:v0.0.5"
 # 日本語版は ja_core_news_lg しか同梱しない（v0.3.1-ja で実測）ので、英語 PII を拾うには en モデルを足した自前イメージをビルドする
 PII_SANITIZER_BASE_IMAGE = "kong/ai-pii-service:v0.3.1-ja"
+
+# CPU 版は arm64 と amd64 でタグが分かれる。ラボは Apple Silicon 前提なので arm64 に固定する
+VLLM_CPU_IMAGE = "vllm/vllm-openai-cpu:v0.33.0-arm64"
 
 CACHE_IMAGES = {
     CacheType.REDIS: "redis:8.0.2",
@@ -338,6 +343,50 @@ class AccessCtx:
 
 
 @dataclass(frozen=True)
+class ServedModelCtx:
+    name: str
+    runtime: ServeRuntime
+    source: str
+    served_name: str
+    port: int
+    args: tuple[str, ...]
+    # runtime: cpu の compose サービス名。metal は None
+    service: str | None
+
+    @property
+    def command(self) -> str:
+        argv = [
+            "vllm", "serve", self.source,
+            # LAN に認証なしの LLM を晒さない。Docker Desktop は loopback 待ち受けにも host.docker.internal で届く
+            "--host", "127.0.0.1",
+            "--port", str(self.port),
+            "--served-model-name", self.served_name,
+            *self.args,
+        ]
+        return shlex.join(argv)
+
+    @property
+    def container_command(self) -> tuple[str, ...]:
+        return (self.source, "--served-model-name", self.served_name, *self.args)
+
+
+@dataclass(frozen=True)
+class LocalLlmCtx:
+    enabled: bool
+    state_dir: str
+    cpu_image: str
+    models: tuple[ServedModelCtx, ...]
+
+    @property
+    def metal(self) -> tuple[ServedModelCtx, ...]:
+        return tuple(m for m in self.models if m.runtime is ServeRuntime.METAL)
+
+    @property
+    def cpu(self) -> tuple[ServedModelCtx, ...]:
+        return tuple(m for m in self.models if m.runtime is ServeRuntime.CPU)
+
+
+@dataclass(frozen=True)
 class CacheCtx:
     enabled: bool
     type: CacheType
@@ -432,6 +481,7 @@ class Ctx:
     prompt_compressor: PromptCompressorCtx
     pii_sanitizer: PiiSanitizerCtx
     access: AccessCtx
+    local_llm: LocalLlmCtx
     certs: CertsCtx
     deck: DeckCtx
     secrets: "SecretsCtx"
@@ -815,6 +865,8 @@ def _build_services(spec: EnvSpec) -> list[str]:
         services.append("ai-compressor")
     if spec.ai.pii_sanitizer:
         services.append("pii-sanitizer")
+    if any(m.serve and m.serve.runtime is ServeRuntime.CPU for p in spec.ai.providers for m in p.models):
+        services.append("vllm-cpu")
     if spec.idp.type is IdpType.KEYCLOAK:
         services.append("keycloak")
     if spec.idp.type is IdpType.LDAP:
@@ -1068,6 +1120,40 @@ def _build_access(spec: EnvSpec, kong: KongCtx) -> AccessCtx:
     )
 
 
+def _build_local_llm(spec: EnvSpec, ports: dict[str, int]) -> LocalLlmCtx:
+    owner_of = {port: key for key, port in ports.items()}
+    models = []
+    for provider in spec.ai.providers:
+        for model in provider.models:
+            if not model.serve:
+                continue
+            port = model.serve_port
+            if port in owner_of:
+                raise PortConflictError(
+                    f"models[{model.name}].serve の待ち受けポート {port} は {owner_of[port]} が使っています。"
+                    "upstream_url のポートを変えてください。"
+                )
+            cpu = model.serve.runtime is ServeRuntime.CPU
+            models.append(
+                ServedModelCtx(
+                    name=model.name,
+                    runtime=model.serve.runtime,
+                    source=model.serve.model or model.target_name,
+                    # Kong は target 名を body の model に入れて送るので、vLLM 側の公開名をそれに揃える
+                    served_name=model.target_name,
+                    port=port,
+                    args=tuple(model.serve.args),
+                    service=f"vllm-{model.name}" if cpu else None,
+                )
+            )
+    return LocalLlmCtx(
+        enabled=bool(models),
+        state_dir=".vllm",
+        cpu_image=VLLM_CPU_IMAGE,
+        models=tuple(models),
+    )
+
+
 def build_context(spec: EnvSpec) -> Ctx:
     ports = allocate_ports(spec)
     kong = _build_kong(spec)
@@ -1088,6 +1174,7 @@ def build_context(spec: EnvSpec) -> Ctx:
         prompt_compressor=_build_prompt_compressor(spec),
         pii_sanitizer=_build_pii_sanitizer(spec),
         access=_build_access(spec, kong),
+        local_llm=_build_local_llm(spec, ports),
         certs=_build_certs(spec, kong),
         deck=deck,
         secrets=_build_secrets(spec, refs),

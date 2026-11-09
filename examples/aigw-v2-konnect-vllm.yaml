@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=../schemas/env.schema.json
+customer: acme
+gateway: ai-gateway-v2
+control_plane: konnect
+
+ai:
+  providers:
+    - type: vllm
+      models:
+        - name: qwen3-5-0-8b
+          upstream_url: http://host.docker.internal:8001/v1/chat/completions
+          serve:
+            runtime: metal
+            model: mlx-community/Qwen3.5-0.8B-MLX-4bit
+            args: [--max-model-len, "8192", --gpu-memory-utilization, "0.2"]
+        - name: bge-reranker-v2-m3
+          model_id: BAAI/bge-reranker-v2-m3
+          capabilities: [rerank]
+          formats: [passthrough]
+          upstream_url: http://host.docker.internal:8003/v1/rerank
+          serve:
+            runtime: cpu
+            args: [--runner, pooling, --max-model-len, "2048"]
+    - type: openai
+      auth: none
+      models:
+        - name: multilingual-e5-base
+          model_id: intfloat/multilingual-e5-base
+          capabilities: [embeddings]
+          upstream_url: http://host.docker.internal:8002/v1/embeddings
+          serve:
+            runtime: metal
+            args: [--runner, pooling, --max-model-len, "512", --gpu-memory-utilization, "0.05"]
+
+idp:
+  type: none
+
+cache:
+  type: none
+
+vectordb:
+  type: none

@@ -19,11 +19,21 @@ run = '''
 set -euo pipefail
 {{ check_vault_env() -}}
 docker compose up -d
+{% if local_llm.enabled %}
+mise run vllm:up
+{% endif %}
 '''
 
 [tasks.down]
 description = "環境を停止する"
+{% if local_llm.enabled %}
+run = """
+mise run vllm:down
+docker compose down
+"""
+{% else %}
 run = "docker compose down"
+{% endif %}
 
 [tasks.reset]
 description = "ボリュームごと作り直す"
@@ -94,6 +104,9 @@ trap - EXIT
 echo "CONTROL_PLANE_ID=$cp_id を .env に反映しました。"
 
 docker compose up -d
+{% if local_llm.enabled %}
+mise run vllm:up
+{% endif %}
 {% else %}
 
 docker compose up -d
@@ -171,6 +184,126 @@ chmod 600 "$tmp"
 mv "$tmp" .env
 trap - EXIT
 echo "API キーを ${filled} 個生成しました。値は .env にあります。"
+'''
+
+{% endif %}
+{% if local_llm.enabled %}
+[tasks."vllm:up"]
+description = "ローカルの vLLM を起動し、全モデルが応答するまで待つ"
+run = '''
+set -euo pipefail
+mkdir -p {{ local_llm.state_dir }}
+{% if local_llm.metal %}
+if ! command -v vllm >/dev/null; then
+  echo "vllm が見つかりません。brew tap vllm-project/vllm-metal https://github.com/vllm-project/vllm-metal && brew install vllm-project/vllm-metal/vllm-metal で入れてください。" >&2
+  exit 1
+fi
+# 端末を閉じたときの SIGHUP で止まらないよう nohup で切り離す
+{% endif %}
+{% for model in local_llm.metal %}
+if curl -sf -o /dev/null http://127.0.0.1:{{ model.port }}/v1/models; then
+  echo "{{ model.name }}: :{{ model.port }} が既に応答しているので起動しません"
+else
+  nohup {{ model.command }} > {{ local_llm.state_dir }}/{{ model.name }}.log 2>&1 &
+  echo $! > {{ local_llm.state_dir }}/{{ model.name }}.pid
+  echo "{{ model.name }}: 起動しました（ログ: {{ local_llm.state_dir }}/{{ model.name }}.log）"
+fi
+{% endfor %}
+{% if local_llm.cpu %}
+docker compose up -d{% for model in local_llm.cpu %} {{ model.service }}{% endfor %}
+
+{% endif %}
+# 初回は Hugging Face から重みを取るので、1 モデルあたり最大 10 分待つ
+for target in{% for model in local_llm.models %} {{ model.name }}:{{ model.port }}{% endfor %}; do
+  name=${target%%:*}
+  port=${target##*:}
+  for i in $(seq 1 300); do
+    if curl -sf -o /dev/null "http://127.0.0.1:$port/v1/models"; then
+      echo "$name: 応答あり（:$port）"
+      break
+    fi
+    pidfile="{{ local_llm.state_dir }}/$name.pid"
+    if [ -f "$pidfile" ] && ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+      echo "$name が起動中に終了しました。{{ local_llm.state_dir }}/$name.log を確認してください。" >&2
+      exit 1
+    fi
+    if [ "$i" = 300 ]; then
+      echo "$name が 10 分以内に応答しませんでした。mise run vllm:logs $name を確認してください。" >&2
+      exit 1
+    fi
+    sleep 2
+  done
+done
+'''
+
+[tasks."vllm:down"]
+description = "ローカルの vLLM を止める"
+run = '''
+set -uo pipefail
+{% for model in local_llm.metal %}
+pidfile={{ local_llm.state_dir }}/{{ model.name }}.pid
+if [ -f "$pidfile" ]; then
+  pid=$(cat "$pidfile")
+  # SIGTERM なら vLLM が EngineCore まで畳む。応答しないときだけ子ごと落とす
+  if kill "$pid" 2>/dev/null; then
+    for _ in $(seq 1 30); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      pkill -9 -P "$pid"
+      kill -9 "$pid"
+    fi
+  fi
+  rm -f "$pidfile"
+  echo "{{ model.name }}: 停止しました"
+fi
+{% endfor %}
+{% if local_llm.cpu %}
+docker compose stop{% for model in local_llm.cpu %} {{ model.service }}{% endfor %}
+
+{% endif %}
+'''
+
+[tasks."vllm:status"]
+description = "ローカルの vLLM の応答を確かめる"
+run = '''
+for target in{% for model in local_llm.models %} {{ model.name }}:{{ model.port }}:{{ model.runtime.value }}{% endfor %}; do
+  IFS=: read -r name port runtime <<< "$target"
+  if curl -sf -o /dev/null "http://127.0.0.1:$port/v1/models"; then state=up; else state=down; fi
+  printf '%-32s %-6s :%-6s %s\n' "$name" "$runtime" "$port" "$state"
+done
+'''
+
+[tasks."vllm:logs"]
+description = "ローカルの vLLM のログを追う。モデル名を引数で渡せる"
+run = '''
+name='{% raw %}{{arg(name="model", default="")}}{% endraw %}'
+case "$name" in
+{% for model in local_llm.metal %}
+  {{ model.name }}) exec tail -n 100 -F {{ local_llm.state_dir }}/{{ model.name }}.log ;;
+{% endfor %}
+{% for model in local_llm.cpu %}
+  {{ model.name }}) exec docker compose logs -f --tail 100 {{ model.service }} ;;
+{% endfor %}
+  "")
+{% if local_llm.cpu and local_llm.metal %}
+    docker compose logs -f --tail 20{% for model in local_llm.cpu %} {{ model.service }}{% endfor %} &
+    trap 'kill $!' EXIT
+{% endif %}
+{% if local_llm.metal %}
+    tail -n 20 -F{% for model in local_llm.metal %} {{ local_llm.state_dir }}/{{ model.name }}.log{% endfor %}
+
+{% else %}
+    exec docker compose logs -f --tail 20{% for model in local_llm.cpu %} {{ model.service }}{% endfor %}
+
+{% endif %}
+    ;;
+  *)
+    echo "モデル名は{% for model in local_llm.models %} {{ model.name }}{% endfor %} のどれかです。" >&2
+    exit 1
+    ;;
+esac
 '''
 
 {% endif %}
