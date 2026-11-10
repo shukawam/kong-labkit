@@ -50,7 +50,7 @@ kongctl 1.20.2 で、`ai_gateway_model_provider` を `--write-secrets` 無しで
 - 期限の無い credential を同じ名前で作り直す、別名の期限付き credential を作る、はどちらも直後から 200
 - 期限が来ると Konnect の一覧から消え DP は 401。同じ名前の作成は 4〜5 分間 `409 name (type: unique) constraint failed` になり、その後の sync で**同じ値のキーが新しい ttl で復活する**
 
-credential に更新 API が無いので、宣言的に管理する限り防げない。期限付きキーは kongctl の外（API や UI）で毎回別の名前で発行するのが安全。generator 側で直すなら、`ttl` 付きのキーを kongctl.yaml に出さず、mise のタスクから API で名前に日時を入れて発行する形が候補。実測の経緯は aozora-bank-v2 の `docs/verification.md` にある。
+credential に更新 API が無いので、宣言的に管理する限り防げない。期限付きキーは kongctl の外（API や UI）で毎回別の名前で発行するのが安全。generator 側で直すなら、`ttl` 付きのキーを kongctl.yaml に出さず、mise のタスクから API で名前に日時を入れて発行する形が候補。
 
 ### v2 の `type: openai` + `auth: api-key` が kongctl 1.26.0 で読み込めない
 
