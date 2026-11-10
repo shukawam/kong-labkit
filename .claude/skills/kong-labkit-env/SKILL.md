@@ -81,7 +81,7 @@ description: Use when someone describes a Kong verification environment in natur
 | Keycloak で `.env` の `KEYCLOAK_CLIENT_SECRET` を変える | `kong.yaml` と `realm-export.json` に実値が埋め込み済みで、`.env` 側は参照されない |
 | `ai-gateway-v1` に `upstream: httpbin` を明示 | ルートが出ないのに `mise run smoke` が叩くので必ず 404。既定のままにする |
 | v2 で `type: openai` + `auth: api-key`（OpenAI 本家） | kongctl 1.26.0 が `auth.token` を未知のフィールドとして読み込み時に弾く。sync まで進まない |
-| `keys[].ttl` の期限を守らせる | `mise run sync` のたびに kongctl が TTL 付きキーを作り直す。期限前なら延長、期限後なら同じ値で復活する |
+| `keys[].ttl` の期限を守らせる | `mise run sync` のたびに kongctl が TTL 付きキーを同じ名前で作り直す。期限前に作り直すと DP が 401 で弾き、期限後は数分後の sync で同じ値のまま復活する |
 | OpenAI SDK の `api_key` でキーを渡す | SDK は `Authorization: Bearer` で送るが key-auth はこれを読まず 401。`default_headers={"apikey": ...}` で渡す |
 | passthrough の Rerank を Konnect Explorer でモデル別に見る | トークン数と Consumer は付くが、AI gateway model が空になる |
 
@@ -108,7 +108,7 @@ description: Use when someone describes a Kong verification environment in natur
 | 「手元で vLLM を動かしたい」「GPU サーバが無い」 | `models[].serve`。`runtime: metal` はホストの vllm-metal（brew）、`runtime: cpu` は compose の vLLM CPU コンテナ。ModernBERT の reranker のように vllm-metal が持たないモデルは `cpu`。`upstream_url` は `http://host.docker.internal:<port>/...` にする |
 | 「利用者ごとの API キー」「Keycloak までの暫定認証」 | `ai.consumers[].keys`。全モデルに key-auth（`apikey` ヘッダ）が掛かる。キーの値は `mise run setup` が `.env` に乱数で入れる |
 | 「部署ごとにトークン上限」 | `ai.consumer_groups[].rate_limit`（`tokens` / `window` 秒）。グループ単位の `ai-rate-limiting-advanced`（total_tokens、固定窓） |
-| 「期限付きのキー」 | `keys[].ttl`（秒）。ただし §検証は通るが動かないもの の通り sync のたびに作り直される |
+| 「期限付きのキー」 | `keys[].ttl`（秒）。ただし §検証は通るが動かないもの の通り sync と相性が悪い。setup の後は sync を流さない前提で使う |
 | 「先方と同じ DP の版で」 | `gateway_version`（パッチまで。例 `2.2.0`）。v2 は Konnect 側の `min_runtime_version` も揃う |
 | 「Konnect 上の名前を指定したい」 | 接尾辞込みでそのまま使うなら `konnect_cp_name`、接頭辞だけなら `konnect_name` |
 

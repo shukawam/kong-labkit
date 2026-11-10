@@ -195,7 +195,8 @@ ai_gateways:
             type: api-key
             api_key: !secret {source: !env {{ key.env_var }}}
 {% if key.ttl %}
-            # 作成時点からの残り秒数。Konnect は残り秒数を返すので、kongctl は sync のたびに作り直して期限を戻す
+            # 作成時点からの残り秒数。Konnect が残り秒数を返すので kongctl は sync のたびに作り直し、
+            # 期限前に同じ名前で作り直したキーは DP が 401 で弾く（2.2.0 で実測）。期限後は同じ値で復活する
             ttl: {{ key.ttl }}
 {% endif %}
 {% endfor %}
