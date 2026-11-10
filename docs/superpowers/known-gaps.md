@@ -46,7 +46,7 @@ kongctl 1.20.2 で、`ai_gateway_model_provider` を `--write-secrets` 無しで
 
 `ai.consumers[].keys[].ttl` は kongctl の credential の `ttl` にそのまま渡している。Konnect の GET は `ttl` を「残り秒数」で返し、kongctl 1.26.0 はこれを宣言値との差分とみなすので、**sync のたびに credential を削除して同じ名前で作り直す**。DP 2.2.0 で実測した結果は次の通り。
 
-- 期限前に作り直すと、Konnect 上は新しい id と全量の ttl になるが、**DP はそのキーを 401 で弾く**（同じ値でも別の値でも同じ。少なくとも新しい期限まで続く）。setup が 2 回 sync するだけでも起きる
+- 期限前に作り直すと、Konnect 上は新しい id と全量の ttl になるが、**DP はそのキーを 401 で弾く**（同じ値でも別の値でも同じ。少なくとも新しい期限まで続く）。setup をやり直す（sync が 2 回走る）だけでも起きる
 - 期限の無い credential を同じ名前で作り直す、別名の期限付き credential を作る、はどちらも直後から 200
 - 期限が来ると Konnect の一覧から消え DP は 401。同じ名前の作成は約 4 分間 `409 name (type: unique) constraint failed` になり、その後の sync で**同じ値のキーが新しい ttl で復活する**
 
