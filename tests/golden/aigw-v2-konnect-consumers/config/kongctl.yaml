@@ -99,7 +99,7 @@ ai_gateways:
             type: api-key
             api_key: !secret {source: !env AI_CONSUMER_KEY_BOB_TEMPORARY}
             # 作成時点からの残り秒数。Konnect が残り秒数を返すので kongctl は sync のたびに作り直し、
-            # 期限前に同じ名前で作り直したキーは DP が 401 で弾く（2.2.0 で実測）。期限後は同じ値で復活する
+            # 期限前に同じ名前で作り直したキーは DP が 401 で弾く（2.2.0 と 2.3.0 で実測）。期限後は同じ値で復活する
             ttl: 3600
 
     consumer_groups:

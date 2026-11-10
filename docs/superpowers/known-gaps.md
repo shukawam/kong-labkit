@@ -44,7 +44,7 @@ kongctl 1.20.2 で、`ai_gateway_model_provider` を `--write-secrets` 無しで
 
 ### TTL 付きの API キーは `mise run sync` のたびに作り直される
 
-`ai.consumers[].keys[].ttl` は kongctl の credential の `ttl` にそのまま渡している。Konnect の GET は `ttl` を「残り秒数」で返し、kongctl 1.26.0 はこれを宣言値との差分とみなすので、**sync のたびに credential を削除して同じ名前で作り直す**。DP 2.2.0 で実測した結果は次の通り。
+`ai.consumers[].keys[].ttl` は kongctl の credential の `ttl` にそのまま渡している。Konnect の GET は `ttl` を「残り秒数」で返し、kongctl 1.26.0 はこれを宣言値との差分とみなすので、**sync のたびに credential を削除して同じ名前で作り直す**。DP 2.2.0 と 2.3.0 で実測した結果は次の通り（どちらも同じ）。
 
 - 期限前に作り直すと、Konnect 上は新しい id と全量の ttl になるが、**DP はそのキーを 401 で弾く**（同じ値でも別の値でも同じ。少なくとも新しい期限まで続く）。setup をやり直す（sync が 2 回走る）だけでも起きる
 - 期限の無い credential を同じ名前で作り直す、別名の期限付き credential を作る、はどちらも直後から 200
@@ -58,7 +58,7 @@ credential に更新 API が無いので、宣言的に管理する限り防げ�
 
 ### passthrough の model は Konnect Analytics で空になる
 
-`formats: [passthrough]` の AI Model への要求は、Konnect の llm_usage（Explorer）で AI gateway consumer とトークン数は付くが、AI gateway model が `empty` になる（2.2.0 の DP で実測）。Grafana 側は `gen_ai.request.model` に target 名が入る。
+`formats: [passthrough]` の AI Model への要求は、Konnect の llm_usage（Explorer）で AI gateway consumer とトークン数は付くが、AI gateway model が `empty` になる（2.2.0 と 2.3.0 の DP で実測）。Grafana 側は `gen_ai.request.model` に target 名が入る。
 
 ### `serve` は Docker Desktop for Mac 前提
 
