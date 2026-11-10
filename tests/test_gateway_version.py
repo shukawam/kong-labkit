@@ -33,7 +33,7 @@ def test_gateway_version_pins_the_data_plane_image():
 
 def test_gateway_version_pins_the_ai_gateway_runtime_to_major_minor():
     gateway = gateway_of(v2(gateway_version="2.2.0"))
-    # 既定は作成時点の最新 GA（2026-11 時点で 2.3）。2.2 の DP は CP と版が完全一致しないと同期を拒む
+    # 既定は作成時点の最新 GA。DP より新しい版の項目を Konnect が受け付けてしまわないよう DP に揃える
     assert gateway["min_runtime_version"] == "2.2"
     # 自動昇格を残すと、接続した DP 次第で最低版が上がり、2.2 に戻せなくなる
     assert gateway["runtime_auto_upgrade"] is False
