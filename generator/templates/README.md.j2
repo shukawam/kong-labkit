@@ -16,15 +16,21 @@
 | Prompt Guard | {{ spec.ai.prompt_guard.value if prompt_guard.enabled else 'なし' }} |
 | Prompt Compressor | {{ '有効' if prompt_compressor.enabled else 'なし' }} |
 | PII Sanitizer | {{ '有効' if pii_sanitizer.enabled else 'なし' }} |
+{% if spec.gateway.value == 'ai-gateway-v2' %}
+| AI Consumer | {{ (access.consumers | length ~ ' 人（key-auth）') if access.enabled else 'なし（認証なし）' }} |
+{% endif %}
+{% if spec.gateway_version %}
+| Data Plane | `{{ kong.image }}`{% if kong.min_runtime_version %}（Konnect 側の min_runtime_version も {{ kong.min_runtime_version }} に固定）{% endif %} |
+{% endif %}
 
 ## 前提
 
-必要なツールは docker、mise{% if spec.control_plane.value == 'konnect' %}、kongctl{% endif %}{% if spec.gateway.value != 'ai-gateway-v2' %}、deck{% endif %} です。
+必要なツールは docker、mise{% if spec.control_plane.value == 'konnect' %}、kongctl{% endif %}{% if spec.gateway.value != 'ai-gateway-v2' %}、deck{% endif %}{% if local_llm.metal %}、vllm-metal（後述）{% endif %} です。
 
 `.env` の次の項目を埋めてから起動してください。
 
 {% for key, value in env_vars.items() %}
-{% if not value %}
+{% if not value and key not in access.keys | map(attribute='env_var') %}
 - `{{ key }}`
 {% endif %}
 {% endfor %}
@@ -197,6 +203,79 @@ Vault の UI は http://localhost:{{ ports.vault }} で、トークンは `.env`
 spaCy の lg モデルを 2 言語分読み込むため起動に時間がかかり、メモリも数 GB 使います。Data Plane はこのコンテナが healthy になってから起動します。
 
 確かめるには、`/v1/<model>/chat/completions` に氏名・電話番号・メールアドレスを含む `user` メッセージを日本語と英語で投げ、`docker compose logs kong` で LLM へ渡った本文がプレースホルダになっていることを見てください。
+{% endif %}
+{% if local_llm.enabled %}
+
+## ローカル LLM（vLLM）
+
+`upstream_url` の先の vLLM を手元で起動します。1 プロセスに 1 モデルで、Kong の Data Plane からは `host.docker.internal` 経由で届きます。待ち受けは `127.0.0.1` だけなので LAN には晒しません。公開名（`--served-model-name`）は Kong が本文の `model` に入れる target 名に揃えてあります。
+
+| モデル | 実行方法 | ポート | 読み込むモデル | 公開名 |
+|---|---|---|---|---|
+{% for model in local_llm.models %}
+| {{ model.name }} | {{ 'vllm-metal（ホスト）' if model.runtime.value == 'metal' else 'vLLM CPU コンテナ' }} | {{ model.port }} | `{{ model.source }}` | `{{ model.served_name }}` |
+{% endfor %}
+
+```bash
+mise run vllm:up                   # 起動して全モデルの応答を待つ。mise run setup / up からも呼ばれる
+mise run vllm:status               # 各ポートが応答するか
+mise run vllm:logs <モデル名>       # 省略すると全モデル
+mise run vllm:down                 # 停止する。mise run down からも呼ばれる
+```
+
+初回は Hugging Face から重みを取るので、起動に数分かかります。重みは `~/.cache/huggingface` に置かれ、ホストとコンテナで共有します。
+{% if local_llm.metal %}
+
+vllm-metal はホストに Homebrew で入れます。tap を先に足さないと `brew install` がリポジトリを見つけられません。
+
+```bash
+brew tap vllm-project/vllm-metal https://github.com/vllm-project/vllm-metal
+brew install vllm-project/vllm-metal/vllm-metal
+```
+
+ホストで動かすモデルの PID とログは `{{ local_llm.state_dir }}/`（git 管理外）に置きます。vllm-metal の `--gpu-memory-utilization`（既定 0.92）は、Metal に使えるメモリのうち重み・作業領域・KV キャッシュの合計に充てる割合です。既定のまま複数モデルを並べると取り合いになるので、`env.yaml` の `serve.args` で下げてください。下げすぎると `kv_budget` が負になって起動しないので、`mise run vllm:logs <モデル名>` のエラーに出る `model_memory` と `overhead` の合計を上回る値にします。
+{% endif %}
+{% if local_llm.cpu %}
+
+vLLM CPU コンテナ（`{{ local_llm.cpu_image }}`）は compose のサービスで、`mise run up` で Kong と一緒に起動します。vllm-metal が扱えないモデル（ModernBERT の分類ヘッドを持つ reranker など）をこちらで動かします。
+{% endif %}
+{% endif %}
+{% if access.enabled %}
+
+## AI Consumer と API キー
+
+全モデルに key-auth が掛かっていて、`{{ access.key_name }}` ヘッダでキーを送ります。キーの値は `.env` の `AI_CONSUMER_KEY_<キー名>` にあり、`mise run setup`（単体なら `mise run keys`）が空のものだけを乱数で埋めます。値を変えたら `mise run sync` で Konnect に書き込んでください。キーは Konnect 側で書き込み専用なので、`.env` を失うと取り出せません。
+
+| Consumer | グループ | キー | `.env` の変数 | 期限 |
+|---|---|---|---|---|
+{% for consumer in access.consumers %}
+{% for key in consumer.keys %}
+| {{ consumer.name }} | {{ consumer.groups | join('、') if consumer.groups else 'なし' }} | {{ key.name }} | `{{ key.env_var }}` | {{ ('作成から ' ~ key.ttl ~ ' 秒') if key.ttl else 'なし' }} |
+{% endfor %}
+{% endfor %}
+{% if access.rate_limited_groups %}
+
+`ai-rate-limiting-advanced` をグループ単位で掛けています。数えるのは入力と出力の合計トークン（`total_tokens`）で、窓は固定です。上限は応答を受け取った後に加算されるので、上限をまたぐ 1 回は通り、次のリクエストから 429 になります。
+
+| グループ | 上限 |
+|---|---|
+{% for group in access.rate_limited_groups %}
+| {{ group.name }} | {{ group.window }} 秒あたり {{ group.tokens }} トークン |
+{% endfor %}
+{% endif %}
+
+```bash
+curl http://localhost:{{ ports.proxy }}/v1/<model>/chat/completions \
+  -H "{{ access.key_name }}: $AI_CONSUMER_KEY_{{ access.smoke_key.name | upper | replace('-', '_') }}" -H 'Content-Type: application/json' \
+  -d '{"model":"<model>","messages":[{"role":"user","content":"ping"}]}'
+```
+
+OpenAI SDK の `api_key` は `Authorization: Bearer` で送られますが、key-auth はこのヘッダを読みません。SDK から呼ぶときは `api_key` にダミーを入れ、`default_headers={"{{ access.key_name }}": ...}` でキーを渡してください。
+
+期限付きのキーの `ttl` は「作成時点からの残り秒数」で、Konnect の credential には更新 API がありません。期限はデータプレーンがリクエストのたびに判定し、切れたキーは 401 になります。ただし Konnect は `ttl` を残り秒数で返し、kongctl はそれを宣言値との差分とみなすので、**`mise run sync` のたびに期限付きのキーを削除して同じ名前で作り直します**。期限前に作り直すと Konnect 上は期限が全量に戻りますが、Data Plane はそのキーを 401 で弾きます（値を変えても同じ。期限の無いキーや別名の期限付きキーは作り直しても通る）。期限後は数分間 409（名前の重複）で作り直せず、その後の sync で同じ値のキーが新しい期限で復活します。期限付きのキーを置いたまま `mise run sync` を流さないでください。期限を守らせたいなら、期限が来たら `env.yaml` から外して再生成します。
+
+Consumer 別の利用量は Konnect の Observability > Explorer で見られます。From を「LLM usage」、by を「AI gateway consumer」（グループ単位なら「AI gateway consumer group」）にすると、Consumer 別のトークン数とコストが出ます。{% if otel.backend.value == 'otel-lgtm' %}Grafana の Consumer 別パネルは `kong.auth.consumer.name`（AI Consumer の名前）で集計しています。AI Consumer Group は OTel の属性に出ないので、Grafana ではグループ単位に畳めません。{% endif %}
+
 {% endif %}
 {% if idp.ldap %}
 

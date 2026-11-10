@@ -3,6 +3,11 @@
 : "{{ '${' ~ source ~ ':?Set ' ~ source ~ ' in .env}' }}"
 {% endfor %}
 {%- endmacro %}
+{% macro check_consumer_keys() -%}
+{% for key in access.keys %}
+: "{{ '${' ~ key.env_var ~ ':?Run mise run keys to fill ' ~ key.env_var ~ ' in .env}' }}"
+{% endfor %}
+{%- endmacro %}
 {% macro check_vault_env() -%}
 {% for source in secrets.env_sources %}
 : "{{ '${' ~ source ~ ':?Set ' ~ source ~ ' in .env}' }}"
@@ -14,11 +19,21 @@ run = '''
 set -euo pipefail
 {{ check_vault_env() -}}
 docker compose up -d
+{% if local_llm.enabled %}
+mise run vllm:up
+{% endif %}
 '''
 
 [tasks.down]
 description = "環境を停止する"
+{% if local_llm.enabled %}
+run = """
+mise run vllm:down
+docker compose down
+"""
+{% else %}
 run = "docker compose down"
+{% endif %}
 
 [tasks.reset]
 description = "ボリュームごと作り直す"
@@ -51,6 +66,14 @@ set -euo pipefail
 if [ ! -f {{ certs.crt_path }} ]; then
   mise run certs
 fi
+{% if access.enabled %}
+
+mise run keys
+# mise は .env をタスク開始時に読むので、いま埋めたキーを kongctl に渡すには読み直す
+set -a
+. ./.env
+set +a
+{% endif %}
 {% if spec.control_plane.value == 'konnect' %}
 
 {{ deck.env_prefix }}kongctl sync konnect -f config/kongctl.yaml --base-dir . --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT" --auto-approve{% if spec.gateway.value == 'ai-gateway-v2' %} --write-secrets{% endif %}
@@ -81,6 +104,9 @@ trap - EXIT
 echo "CONTROL_PLANE_ID=$cp_id を .env に反映しました。"
 
 docker compose up -d
+{% if local_llm.enabled %}
+mise run vllm:up
+{% endif %}
 {% else %}
 
 docker compose up -d
@@ -104,6 +130,9 @@ description = "宣言的設定を適用する"
 run = '''
 set -euo pipefail
 {{ check_deck_env() }}
+{% if access.enabled %}
+{{ check_consumer_keys() }}
+{% endif %}
 {% if spec.control_plane.value == 'konnect' %}
 {% if spec.gateway.value == 'ai-gateway-v2' %}
 # kongctl は書き込み専用の秘密を比較しないので、.env だけ変えても --write-secrets 無しでは更新が走らない。
@@ -120,6 +149,9 @@ description = "宣言的設定の差分を見る"
 run = '''
 set -euo pipefail
 {{ check_deck_env() }}
+{% if access.enabled %}
+{{ check_consumer_keys() }}
+{% endif %}
 {% if spec.control_plane.value == 'konnect' %}
 {{ deck.env_prefix }}kongctl diff konnect -f config/kongctl.yaml --base-dir . --base-url {{ kong.konnect_api_url }} --pat "$KONNECT_PAT"{% if spec.gateway.value == 'ai-gateway-v2' %} --write-secrets{% endif %}
 {% else %}
@@ -127,6 +159,155 @@ set -euo pipefail
 {% endif %}
 '''
 
+{% if access.enabled %}
+[tasks.keys]
+description = "AI Consumer の API キーのうち、.env で空のものを乱数で埋める"
+run = '''
+set -euo pipefail
+# 値が入っているキーは触らない。setup をやり直しても配布済みのキーが変わらないようにする
+tmp=$(mktemp ./.env.XXXXXX)
+trap 'rm -f "$tmp" "$tmp.next"' EXIT
+cp .env "$tmp"
+filled=0
+for name in{% for key in access.keys %} {{ key.env_var }}{% endfor %}; do
+  if grep -q "^${name}=\"\"\$" "$tmp"; then
+    value=$(openssl rand -hex 24)
+    sed "s|^${name}=\"\"\$|${name}=\"${value}\"|" "$tmp" > "$tmp.next"
+    mv "$tmp.next" "$tmp"
+    filled=$((filled + 1))
+  elif ! grep -q "^${name}=" "$tmp"; then
+    # --force の再生成は .env を上書きしないので、後から足した Consumer のキーは行ごとここで足す
+    printf '%s="%s"\n' "$name" "$(openssl rand -hex 24)" >> "$tmp"
+    filled=$((filled + 1))
+  fi
+done
+chmod 600 "$tmp"
+mv "$tmp" .env
+trap - EXIT
+echo "API キーを ${filled} 個生成しました。値は .env にあります。"
+'''
+
+{% endif %}
+{% if local_llm.enabled %}
+[tasks."vllm:up"]
+description = "ローカルの vLLM を起動し、全モデルが応答するまで待つ"
+run = '''
+set -euo pipefail
+mkdir -p {{ local_llm.state_dir }}
+{% if local_llm.metal %}
+if ! command -v vllm >/dev/null; then
+  echo "vllm が見つかりません。brew tap vllm-project/vllm-metal https://github.com/vllm-project/vllm-metal && brew install vllm-project/vllm-metal/vllm-metal で入れてください。" >&2
+  exit 1
+fi
+# 端末を閉じたときの SIGHUP で止まらないよう nohup で切り離す
+{% endif %}
+{% for model in local_llm.metal %}
+if curl -sf -o /dev/null http://127.0.0.1:{{ model.port }}/v1/models; then
+  echo "{{ model.name }}: :{{ model.port }} が既に応答しているので起動しません"
+else
+  nohup {{ model.command }} > {{ local_llm.state_dir }}/{{ model.name }}.log 2>&1 &
+  echo $! > {{ local_llm.state_dir }}/{{ model.name }}.pid
+  echo "{{ model.name }}: 起動しました（ログ: {{ local_llm.state_dir }}/{{ model.name }}.log）"
+fi
+{% endfor %}
+{% if local_llm.cpu %}
+docker compose up -d{% for model in local_llm.cpu %} {{ model.service }}{% endfor %}
+
+{% endif %}
+# 初回は Hugging Face から重みを取るので、1 モデルあたり最大 10 分待つ
+for target in{% for model in local_llm.models %} {{ model.name }}:{{ model.port }}{% endfor %}; do
+  name=${target%%:*}
+  port=${target##*:}
+  for i in $(seq 1 300); do
+    if curl -sf -o /dev/null "http://127.0.0.1:$port/v1/models"; then
+      echo "${name}: 応答あり（:${port}）"
+      break
+    fi
+    pidfile="{{ local_llm.state_dir }}/$name.pid"
+    if [ -f "$pidfile" ] && ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+      echo "$name が起動中に終了しました。{{ local_llm.state_dir }}/$name.log を確認してください。" >&2
+      exit 1
+    fi
+    if [ "$i" = 300 ]; then
+      echo "$name が 10 分以内に応答しませんでした。mise run vllm:logs $name を確認してください。" >&2
+      exit 1
+    fi
+    sleep 2
+  done
+done
+'''
+
+[tasks."vllm:down"]
+description = "ローカルの vLLM を止める"
+run = '''
+set -uo pipefail
+{% for model in local_llm.metal %}
+pidfile={{ local_llm.state_dir }}/{{ model.name }}.pid
+if [ -f "$pidfile" ]; then
+  pid=$(cat "$pidfile")
+  # SIGTERM なら vLLM が EngineCore まで畳む。応答しないときだけ子ごと落とす
+  if kill "$pid" 2>/dev/null; then
+    for _ in $(seq 1 30); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      pkill -9 -P "$pid"
+      kill -9 "$pid"
+    fi
+  fi
+  rm -f "$pidfile"
+  echo "{{ model.name }}: 停止しました"
+fi
+{% endfor %}
+{% if local_llm.cpu %}
+docker compose stop{% for model in local_llm.cpu %} {{ model.service }}{% endfor %}
+
+{% endif %}
+'''
+
+[tasks."vllm:status"]
+description = "ローカルの vLLM の応答を確かめる"
+run = '''
+for target in{% for model in local_llm.models %} {{ model.name }}:{{ model.port }}:{{ model.runtime.value }}{% endfor %}; do
+  IFS=: read -r name port runtime <<< "$target"
+  if curl -sf -o /dev/null "http://127.0.0.1:$port/v1/models"; then state=up; else state=down; fi
+  printf '%-32s %-6s :%-6s %s\n' "$name" "$runtime" "$port" "$state"
+done
+'''
+
+[tasks."vllm:logs"]
+description = "ローカルの vLLM のログを追う。モデル名を引数で渡せる"
+run = '''
+name='{% raw %}{{arg(name="model", default="")}}{% endraw %}'
+case "$name" in
+{% for model in local_llm.metal %}
+  {{ model.name }}) exec tail -n 100 -F {{ local_llm.state_dir }}/{{ model.name }}.log ;;
+{% endfor %}
+{% for model in local_llm.cpu %}
+  {{ model.name }}) exec docker compose logs -f --tail 100 {{ model.service }} ;;
+{% endfor %}
+  "")
+{% if local_llm.cpu and local_llm.metal %}
+    docker compose logs -f --tail 20{% for model in local_llm.cpu %} {{ model.service }}{% endfor %} &
+    trap 'kill $!' EXIT
+{% endif %}
+{% if local_llm.metal %}
+    tail -n 20 -F{% for model in local_llm.metal %} {{ local_llm.state_dir }}/{{ model.name }}.log{% endfor %}
+
+{% else %}
+    exec docker compose logs -f --tail 20{% for model in local_llm.cpu %} {{ model.service }}{% endfor %}
+
+{% endif %}
+    ;;
+  *)
+    echo "モデル名は{% for model in local_llm.models %} {{ model.name }}{% endfor %} のどれかです。" >&2
+    exit 1
+    ;;
+esac
+'''
+
+{% endif %}
 [tasks.logs]
 description = "ログを追う。サービス名を引数で渡せる"
 run = 'docker compose logs -f {% raw %}{{arg(name="service", default="")}}{% endraw %}'
@@ -153,12 +334,34 @@ if [ "$code" != "{{ upstream.expected_status }}" ]; then
 fi
 {% elif spec.gateway.value == 'ai-gateway-v2' %}
 curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:{{ ports.status }}/status
+{% set auth = '' %}
+{% if access.enabled %}
+{% set first = spec.ai.providers[0].models[0] %}
+code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://localhost:{{ ports.proxy }}/v1/{{ first.name }}/chat/completions \
+  -H 'Content-Type: application/json' -d '{}')
+if [ "$code" != "401" ]; then
+  echo "smoke: request without an API key returned HTTP $code (expected 401)" >&2
+  exit 1
+fi
+{% set auth = '-H "' ~ access.key_name ~ ': $' ~ access.smoke_key.env_var ~ '" ' %}
+{% endif %}
 {% for provider in spec.ai.providers %}
 {% for model in provider.models %}
+{% if 'rerank' in model.capabilities %}
+# passthrough は本文を書き換えないので、model は上流の vLLM が知っている名前で送る
+curl -sS -f -X POST http://localhost:{{ ports.proxy }}/v1/{{ model.name }}/rerank \
+  {{ auth }}-H 'Content-Type: application/json' \
+  -d '{"model":"{{ model.model_id or model.name }}","query":"ping","documents":["pong"]}' > /dev/null
+{% elif 'embeddings' in model.capabilities %}
+curl -sS -f -X POST http://localhost:{{ ports.proxy }}/v1/{{ model.name }}/embeddings \
+  {{ auth }}-H 'Content-Type: application/json' \
+  -d '{"model":"{{ model.name }}","input":"ping"}' > /dev/null
+{% else %}
 # model は省けない。無いと AI Gateway が target を選べず ai-gateway.upstream.local の DNS 解決で 500 になる
 curl -sS -f -X POST http://localhost:{{ ports.proxy }}/v1/{{ model.name }}/chat/completions \
-  -H 'Content-Type: application/json' \
+  {{ auth }}-H 'Content-Type: application/json' \
   -d '{"model":"{{ model.name }}","messages":[{"role":"user","content":"ping"}]}' > /dev/null
+{% endif %}
 {% endfor %}
 {% endfor %}
 {% elif idp.ldap %}
@@ -197,4 +400,4 @@ echo "smoke: OK"
 '''
 
 [env]
-mise.file = ".env"
+_.file = ".env"

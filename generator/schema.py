@@ -72,6 +72,8 @@ class ProviderType(StrEnum):
     VERTEX = "vertex"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    # v2 専用。セルフホストの vLLM（OpenAI 互換）。Kong 側の対応はチャットだけ
+    VLLM = "vllm"
 
 
 class PromptGuardMode(StrEnum):
@@ -92,6 +94,27 @@ class AuthType(StrEnum):
     MANAGED_IDENTITY = "managed-identity"
     # bedrock 専用。STS の一時クレデンシャル（ASIA...）は session_token が無いと AWS が弾く
     SESSION_TOKEN = "session-token"
+    # openai / vllm 専用。認証なしのセルフホスト LLM
+    NONE = "none"
+
+
+class Capability(StrEnum):
+    GENERATE = "generate"
+    EMBEDDINGS = "embeddings"
+    RERANK = "rerank"
+
+
+class ServeRuntime(StrEnum):
+    # ホスト上の vllm-metal（Apple Silicon の GPU）。brew で入れた vllm を mise が起動する
+    METAL = "metal"
+    # compose 上の vLLM CPU コンテナ（linux/arm64）。vllm-metal が持たないモデル（ModernBERT の reranker など）用
+    CPU = "cpu"
+
+
+class ModelFormat(StrEnum):
+    OPENAI = "openai"
+    # 本文を変換せずに上流へ流す。DP 2.2 以降。他の形式とは 1 つの model に同居できない
+    PASSTHROUGH = "passthrough"
 
 
 class Strict(BaseModel):
@@ -201,6 +224,28 @@ class CustomUpstreamSpec(Strict):
         return self
 
 
+# generator が upstream_url と target 名から決めるので、手で渡すと食い違う
+_SERVE_RESERVED_ARGS = ("--host", "--port", "--served-model-name")
+
+
+class ServeSpec(Strict):
+    runtime: ServeRuntime
+    # Hugging Face のリポジトリ。省略時は target 名（model_id か name）
+    model: str | None = None
+    args: list[str] = Field(default_factory=list)
+
+    @field_validator("args")
+    @classmethod
+    def _check_args(cls, value):
+        for arg in value:
+            if arg.split("=", 1)[0] in _SERVE_RESERVED_ARGS:
+                raise ValueError(
+                    f"serve.args に {arg.split('=', 1)[0]} は書けません"
+                    "（待ち受けは upstream_url のポート、公開名は target 名から generator が決めます）。"
+                )
+        return value
+
+
 class Model(Strict):
     name: str
     # v2 の targets[].name に渡す上流側のモデル ID。name は ref とルートパスになるので
@@ -211,16 +256,127 @@ class Model(Strict):
     # 100 万トークンあたりの USD。ai-proxy-advanced の input_cost / output_cost にそのまま渡す
     input_cost: float | None = None
     output_cost: float | None = None
+    # セルフホスト向け。Kong はパスを足さずにこの URL へ投げるので、/v1/chat/completions まで書く
+    upstream_url: str | None = None
+    capabilities: list[Capability] = Field(default_factory=lambda: [Capability.GENERATE], min_length=1)
+    formats: list[ModelFormat] = Field(default_factory=lambda: [ModelFormat.OPENAI], min_length=1)
+    # upstream_url の先を手元で起動する。ラボ用で、顧客側の vLLM の代わり
+    serve: ServeSpec | None = None
+
+    @field_validator("upstream_url")
+    @classmethod
+    def _check_upstream_url(cls, value):
+        if value is None:
+            return value
+        try:
+            return _upstream_url(value)
+        except ValueError as e:
+            raise ValueError(f"models[].upstream_url が不正です: {e}") from None
+
+    @model_validator(mode="after")
+    def _check_formats(self):
+        if ModelFormat.PASSTHROUGH in self.formats and len(set(self.formats)) > 1:
+            raise ValueError(
+                f"models[{self.name}].formats の passthrough は他の形式と同居できません"
+                "（Kong の ai-proxy-advanced が passthrough の target と変換ありの target の混在を拒みます）。"
+                "形式ごとに model を分けてください。"
+            )
+        if Capability.RERANK in self.capabilities and self.formats != [ModelFormat.PASSTHROUGH]:
+            raise ValueError(
+                f"models[{self.name}] の rerank は formats: [passthrough] でだけ使えます"
+                "（OpenAI 形式に rerank が無く、Kong が変換できるのは cohere / bedrock / gemini 形式だけです）。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_serve(self):
+        if self.serve is None:
+            return self
+        if self.upstream_url is None:
+            raise ValueError(
+                f"models[{self.name}].serve には upstream_url が必要です"
+                "（起動するポートと、Kong からの接続先をこの URL から決めます）。"
+            )
+        parts = urlsplit(self.upstream_url)
+        if parts.hostname != "host.docker.internal":
+            raise ValueError(
+                f"models[{self.name}].serve を使うときは upstream_url のホストを host.docker.internal にしてください"
+                "（手元で起動した vLLM に Kong の DP コンテナから届く名前がこれだけです）。"
+            )
+        if parts.port is None:
+            raise ValueError(
+                f"models[{self.name}].serve を使うときは upstream_url にポートを明示してください"
+                "（vLLM の待ち受けポートになります。例: http://host.docker.internal:8001/v1/chat/completions）。"
+            )
+        return self
+
+    @property
+    def serve_port(self) -> int | None:
+        return urlsplit(self.upstream_url).port if self.serve and self.upstream_url else None
+
+    @property
+    def target_name(self) -> str:
+        return self.model_id or self.name
+
+    @property
+    def is_default_shape(self) -> bool:
+        return (
+            self.serve is None
+            and self.upstream_url is None
+            and self.capabilities == [Capability.GENERATE]
+            and self.formats == [ModelFormat.OPENAI]
+        )
+
+
+_SELF_HOSTED = (ProviderType.OPENAI, ProviderType.VLLM)
 
 
 class Provider(Strict):
     type: ProviderType
     instance: str | None = None
     region: str | None = None
-    auth: AuthType = AuthType.API_KEY
+    # 未指定は type で決まる（vllm は none、それ以外は api-key）
+    auth: AuthType | None = None
     # azure 専用。未指定は Kong 側の既定（azure-openai）に任せる
     service: AzureService | None = None
     models: list[Model] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _resolve_auth(self):
+        if self.auth is None:
+            self.auth = AuthType.NONE if self.type is ProviderType.VLLM else AuthType.API_KEY
+        if self.auth is AuthType.NONE and self.type not in _SELF_HOSTED:
+            raise ValueError(
+                f"auth: none は type: openai / vllm でだけ使えます（いまは type: {self.type.value}）。"
+                "クラウドの LLM は資格情報なしでは通りません。"
+            )
+        if self.type is ProviderType.VLLM and self.auth is not AuthType.NONE:
+            raise ValueError(
+                f"type: vllm の auth: {self.auth.value} は未対応です"
+                "（vLLM の --api-key を Authorization ヘッダで渡す経路を generator が持っていません）。"
+                "auth を省略するか auth: none にしてください。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_vllm_models(self):
+        if self.type is not ProviderType.VLLM:
+            return self
+        for model in self.models:
+            if model.upstream_url is None:
+                raise ValueError(
+                    f"type: vllm の models[{model.name}] には upstream_url が必要です"
+                    "（vLLM には既定の接続先が無く、Kong は URL にパスを足さないので "
+                    "http://host.docker.internal:8001/v1/chat/completions のようにパスまで書きます）。"
+                )
+            if model.formats != [ModelFormat.PASSTHROUGH] and model.capabilities != [Capability.GENERATE]:
+                raise ValueError(
+                    f"type: vllm の models[{model.name}] は capabilities: [generate] だけにしてください"
+                    "（Kong の vllm ドライバはチャットしか変換しません）。"
+                    "Embedding は type: openai + auth: none + upstream_url で、"
+                    "Rerank は formats: [passthrough] で書けます。"
+                )
+        return self
 
     @model_validator(mode="after")
     def _check_service(self):
@@ -249,14 +405,119 @@ class Provider(Strict):
         return self
 
 
+_SAFE_NAME = r"[a-z0-9][a-z0-9-]*"
+
+
+def _safe_name(value: str, what: str) -> str:
+    if not re.fullmatch(_SAFE_NAME, value):
+        raise ValueError(
+            f"{what} は英小文字・数字・ハイフンだけで、先頭は英小文字か数字にしてください"
+            "（kongctl の ref と .env の変数名の素になります）。"
+        )
+    return value
+
+
+class ConsumerKey(Strict):
+    name: str
+    # Konnect に渡すのは作成時点からの残り秒数。0 は無期限なので受け付けない
+    ttl: int | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value):
+        return _safe_name(value, "ai.consumers[].keys[].name")
+
+    @field_validator("ttl")
+    @classmethod
+    def _check_ttl(cls, value):
+        if value is not None and value <= 0:
+            raise ValueError(
+                "ai.consumers[].keys[].ttl は 1 以上の秒数にしてください"
+                "（Konnect では 0 が無期限を意味するので、期限を付けないなら ttl を書かないでください）。"
+            )
+        return value
+
+
+class AiConsumer(Strict):
+    name: str
+    groups: list[str] = Field(default_factory=list)
+    keys: list[ConsumerKey] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value):
+        return _safe_name(value, "ai.consumers[].name")
+
+    @model_validator(mode="after")
+    def _check_keys(self):
+        if not self.keys:
+            raise ValueError(
+                f"ai.consumers[{self.name}].keys に API キーを 1 つ以上書いてください"
+                "（認証は key-auth なので、キーの無い Consumer はどのモデルも呼べません）。"
+            )
+        return self
+
+
+class RateLimit(Strict):
+    tokens: int = Field(gt=0)
+    window: int = Field(default=60, gt=0)
+
+
+class AiConsumerGroup(Strict):
+    name: str
+    rate_limit: RateLimit | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value):
+        return _safe_name(value, "ai.consumer_groups[].name")
+
+
 class AiSpec(Strict):
     providers: list[Provider] = Field(default_factory=list)
+    # 書くと全モデルに key-auth が掛かる。キーの値は .env の AI_CONSUMER_KEY_<キー名>
+    consumers: list[AiConsumer] = Field(default_factory=list)
+    consumer_groups: list[AiConsumerGroup] = Field(default_factory=list)
     semantic_cache: bool = False
     semantic_routing: bool = False
     embedding_model: str = "text-embedding-3-large"
     prompt_guard: PromptGuardMode = PromptGuardMode.NONE
     prompt_compressor: bool = False
     pii_sanitizer: bool = False
+
+    @model_validator(mode="after")
+    def _check_consumers(self):
+        def duplicates(names):
+            seen, dup = set(), []
+            for name in names:
+                if name in seen:
+                    dup.append(name)
+                seen.add(name)
+            return dup
+
+        if dup := duplicates(c.name for c in self.consumers):
+            raise ValueError(f"ai.consumers の name が重複しています: {', '.join(dup)}")
+        if dup := duplicates(g.name for g in self.consumer_groups):
+            raise ValueError(f"ai.consumer_groups の name が重複しています: {', '.join(dup)}")
+        if dup := duplicates(k.name for c in self.consumers for k in c.keys):
+            raise ValueError(
+                f"ai.consumers[].keys の name が重複しています: {', '.join(dup)}"
+                "（キー名がそのまま .env の AI_CONSUMER_KEY_<キー名> になるので、Consumer をまたいでも一意にしてください）。"
+            )
+        ports = [m.serve_port for p in self.providers for m in p.models if m.serve_port]
+        if dup := duplicates(ports):
+            raise ValueError(
+                f"models[].serve の待ち受けポートが重複しています: {', '.join(map(str, dup))}"
+                "（1 プロセスに 1 モデルなので、upstream_url のポートを分けてください）。"
+            )
+        declared = {g.name for g in self.consumer_groups}
+        for consumer in self.consumers:
+            if missing := [g for g in consumer.groups if g not in declared]:
+                raise ValueError(
+                    f"ai.consumers[{consumer.name}].groups の {', '.join(missing)} が "
+                    "ai.consumer_groups にありません。グループを先に宣言してください。"
+                )
+        return self
 
 
 class LdapUser(Strict):
@@ -309,6 +570,10 @@ class EnvSpec(Strict):
     control_plane: ControlPlane = ControlPlane.KONNECT
     # Konnect 上の見せ方だけを customer から切り離すための上書き
     konnect_name: str | None = None
+    # konnect_name + 接尾辞では表せない名前（bluesky-ai-gateway-v2 など）をそのまま使う
+    konnect_cp_name: str | None = None
+    # 顧客の DP に合わせて image を固定する。v2 では Konnect 側の min_runtime_version も揃える
+    gateway_version: str | None = None
     region: str = "us"
     ai: AiSpec = Field(default_factory=AiSpec)
     idp: IdpSpec = Field(default_factory=IdpSpec)
@@ -445,6 +710,40 @@ class EnvSpec(Strict):
         return self
 
     @model_validator(mode="after")
+    def _check_konnect_cp_name(self):
+        if self.konnect_cp_name is None:
+            return self
+        if self.control_plane is not ControlPlane.KONNECT:
+            raise ValueError(
+                "konnect_cp_name は control_plane: konnect のときだけ指定できます"
+                "（self-managed には Konnect の Control Plane が存在せず、指定しても効きません）。"
+            )
+        if self.konnect_name:
+            raise ValueError(
+                "konnect_cp_name と konnect_name は同時に指定できません"
+                "（konnect_cp_name は名前をそのまま使い、konnect_name は接尾辞を付けるので、どちらが効くか曖昧になります）。"
+                "どちらか一方にしてください。"
+            )
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", self.konnect_cp_name):
+            raise ValueError(
+                "konnect_cp_name は英小文字・数字・ハイフンだけで、先頭は英小文字か数字にしてください"
+                "（kongctl の ref とクラスタ証明書の CN にそのまま入ります）。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_gateway_version(self):
+        # 浮動タグ（2.2 や latest）は再生成のたびに中身が変わり、CP の min_runtime_version とずれる
+        if self.gateway_version is not None and not re.fullmatch(
+            r"\d+\.\d+\.\d+(\.\d+)?(-[0-9A-Za-z.]+)?", self.gateway_version
+        ):
+            raise ValueError(
+                "gateway_version はパッチまで含む Docker タグにしてください（例: 2.2.0、3.14.0.0）。"
+                "2.2 や latest のような浮動タグは、再生成のたびに DP の版が変わるので受け付けません。"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _check_ldap_users(self):
         if self.idp.users and self.idp.type is not IdpType.LDAP:
             raise ValueError(
@@ -531,6 +830,46 @@ class EnvSpec(Strict):
                 "（generator が ai-sanitizer を書く経路は config/kongctl.yaml の policies だけで、"
                 "kong.yaml 側には出していません）。"
                 "gateway: ai-gateway-v2 にするか、ai.pii_sanitizer を外してください。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_self_hosted_needs_the_v2_data_plane(self):
+        if self.gateway is Gateway.AI_GATEWAY_V2:
+            return self
+        for provider in self.ai.providers:
+            if (
+                provider.type is ProviderType.VLLM
+                or provider.auth is AuthType.NONE
+                or not all(m.is_default_shape for m in provider.models)
+            ):
+                raise ValueError(
+                    "type: vllm、auth: none、models[] の upstream_url / capabilities / formats は "
+                    "ai-gateway-v2 でだけ使えます"
+                    "（generator がこれらを書く経路は config/kongctl.yaml の AI Model だけで、"
+                    "kong.yaml 側には出していません）。"
+                    "gateway: ai-gateway-v2 にしてください。"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _check_consumers_need_the_v2_data_plane(self):
+        if (self.ai.consumers or self.ai.consumer_groups) and self.gateway is not Gateway.AI_GATEWAY_V2:
+            raise ValueError(
+                "ai.consumers / ai.consumer_groups は ai-gateway-v2 でだけ使えます"
+                "（AI Consumer は AI Gateway v2 のエンティティで、v1 / api-gateway の Consumer は "
+                "idp.type: ldap の users から作ります）。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_semantic_needs_a_provider_that_embeds(self):
+        semantic = self.ai.semantic_cache or self.ai.semantic_routing
+        if semantic and any(p.type is ProviderType.VLLM for p in self.ai.providers):
+            raise ValueError(
+                "ai.semantic_cache / ai.semantic_routing は type: vllm のプロバイダと併用できません"
+                "（semantic balancer は model と同じプロバイダで埋め込みを作りますが、"
+                "Kong の vllm ドライバは embeddings を持ちません）。"
             )
         return self
 

@@ -1,5 +1,7 @@
+import shlex
 from base64 import b64encode
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from generator.schema import (
     AuthType,
@@ -16,6 +18,7 @@ from generator.schema import (
     ProviderType,
     PromptGuardMode,
     SecretsBackend,
+    ServeRuntime,
     UpstreamType,
     VectorDbType,
 )
@@ -144,6 +147,9 @@ COMPRESSOR_IMAGE = "docker.cloudsmith.io/kong/ai-compress/service:v0.0.5"
 # 日本語版は ja_core_news_lg しか同梱しない（v0.3.1-ja で実測）ので、英語 PII を拾うには en モデルを足した自前イメージをビルドする
 PII_SANITIZER_BASE_IMAGE = "kong/ai-pii-service:v0.3.1-ja"
 
+# CPU 版は arm64 と amd64 でタグが分かれる。ラボは Apple Silicon 前提なので arm64 に固定する
+VLLM_CPU_IMAGE = "vllm/vllm-openai-cpu:v0.33.0-arm64"
+
 CACHE_IMAGES = {
     CacheType.REDIS: "redis:8.0.2",
     CacheType.REDIS_STACK: "redis/redis-stack:7.4.0-v3",
@@ -168,6 +174,9 @@ class KongCtx:
     konnect_telemetry_domain: str | None
     konnect_api_url: str | None
     dp_labels: str
+    # v2 の ai_gateways[].min_runtime_version。None なら Konnect の既定（作成時点の最新 GA）に任せる
+    min_runtime_version: str | None = None
+    extra_hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -283,6 +292,101 @@ class PiiSanitizerCtx:
 
 
 @dataclass(frozen=True)
+class ConsumerKeyCtx:
+    name: str
+    ref: str
+    env_var: str
+    ttl: int | None
+
+
+@dataclass(frozen=True)
+class ConsumerCtx:
+    name: str
+    ref: str
+    groups: tuple[str, ...]
+    keys: tuple[ConsumerKeyCtx, ...]
+
+
+@dataclass(frozen=True)
+class ConsumerGroupCtx:
+    name: str
+    ref: str
+    members: tuple[str, ...]
+    # ai-rate-limiting-advanced を掛けないグループは None
+    policy_name: str | None
+    policy_ref: str | None
+    tokens: int | None
+    window: int | None
+
+
+@dataclass(frozen=True)
+class AccessCtx:
+    enabled: bool
+    auth_strategy_name: str
+    auth_strategy_ref: str
+    key_name: str
+    consumers: tuple[ConsumerCtx, ...]
+    groups: tuple[ConsumerGroupCtx, ...]
+
+    @property
+    def keys(self) -> tuple[ConsumerKeyCtx, ...]:
+        return tuple(key for consumer in self.consumers for key in consumer.keys)
+
+    @property
+    def smoke_key(self) -> ConsumerKeyCtx:
+        # 期限付きのキーで smoke を組むと、期限後に smoke だけが落ちる
+        return next((k for k in self.keys if k.ttl is None), self.keys[0])
+
+    @property
+    def rate_limited_groups(self) -> tuple[ConsumerGroupCtx, ...]:
+        return tuple(g for g in self.groups if g.policy_name)
+
+
+@dataclass(frozen=True)
+class ServedModelCtx:
+    name: str
+    runtime: ServeRuntime
+    source: str
+    served_name: str
+    port: int
+    args: tuple[str, ...]
+    # runtime: cpu の compose サービス名。metal は None
+    service: str | None
+
+    @property
+    def command(self) -> str:
+        argv = [
+            "vllm", "serve", self.source,
+            # LAN に認証なしの LLM を晒さない。Docker Desktop は loopback 待ち受けにも host.docker.internal で届く
+            "--host", "127.0.0.1",
+            "--port", str(self.port),
+            "--served-model-name", self.served_name,
+            *self.args,
+        ]
+        return shlex.join(argv)
+
+    @property
+    def container_command(self) -> tuple[str, ...]:
+        return (self.source, "--served-model-name", self.served_name, *self.args)
+
+
+@dataclass(frozen=True)
+class LocalLlmCtx:
+    enabled: bool
+    state_dir: str
+    cpu_image: str
+    models: tuple[ServedModelCtx, ...]
+
+    @property
+    def metal(self) -> tuple[ServedModelCtx, ...]:
+        return tuple(m for m in self.models if m.runtime is ServeRuntime.METAL)
+
+    @property
+    def cpu(self) -> tuple[ServedModelCtx, ...]:
+        return tuple(m for m in self.models if m.runtime is ServeRuntime.CPU)
+
+
+@dataclass(frozen=True)
 class CacheCtx:
     enabled: bool
     type: CacheType
@@ -376,6 +480,8 @@ class Ctx:
     prompt_guard: PromptGuardCtx
     prompt_compressor: PromptCompressorCtx
     pii_sanitizer: PiiSanitizerCtx
+    access: AccessCtx
+    local_llm: LocalLlmCtx
     certs: CertsCtx
     deck: DeckCtx
     secrets: "SecretsCtx"
@@ -388,9 +494,26 @@ class Ctx:
 def _build_kong(spec: EnvSpec) -> KongCtx:
     konnect = spec.control_plane is ControlPlane.KONNECT
     suffix = "ai-gateway" if spec.is_ai else "gateway"
+    image = KONG_IMAGES[spec.gateway]
+    min_runtime_version = None
+    if spec.gateway_version:
+        image = image.split(":")[0] + ":" + spec.gateway_version
+        if spec.gateway is Gateway.AI_GATEWAY_V2:
+            min_runtime_version = ".".join(spec.gateway_version.split(".")[:2])
+    upstream_hosts = {
+        urlsplit(model.upstream_url).hostname
+        for provider in spec.ai.providers
+        for model in provider.models
+        if model.upstream_url
+    }
     return KongCtx(
-        image=KONG_IMAGES[spec.gateway],
-        cp_name=f"{spec.konnect_name or spec.customer}-{suffix}",
+        image=image,
+        cp_name=spec.konnect_cp_name or f"{spec.konnect_name or spec.customer}-{suffix}",
+        min_runtime_version=min_runtime_version,
+        # Docker Desktop は自前で解決するが、Linux の Docker Engine は host-gateway の明示が要る
+        extra_hosts=(
+            ("host.docker.internal:host-gateway",) if "host.docker.internal" in upstream_hosts else ()
+        ),
         konnect_domain=f"{spec.region}.cp.konghq.com" if konnect else None,
         konnect_telemetry_domain=f"{spec.region}.tp.konghq.com" if konnect else None,
         konnect_api_url=f"https://{spec.region}.api.konghq.com" if konnect else None,
@@ -742,6 +865,8 @@ def _build_services(spec: EnvSpec) -> list[str]:
         services.append("ai-compressor")
     if spec.ai.pii_sanitizer:
         services.append("pii-sanitizer")
+    if any(m.serve and m.serve.runtime is ServeRuntime.CPU for p in spec.ai.providers for m in p.models):
+        services.append("vllm-cpu")
     if spec.idp.type is IdpType.KEYCLOAK:
         services.append("keycloak")
     if spec.idp.type is IdpType.LDAP:
@@ -777,6 +902,8 @@ def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
         env["KONG_LICENSE_DATA"] = ""
 
     for provider in spec.ai.providers:
+        if provider.auth is AuthType.NONE:
+            continue
         if provider.type is ProviderType.AZURE:
             if provider.auth is AuthType.API_KEY:
                 env["AZURE_OPENAI_API_KEY"] = ""
@@ -788,6 +915,11 @@ def _build_env_vars(spec: EnvSpec) -> dict[str, str]:
                 env[key] = ""
             if provider.type is ProviderType.BEDROCK and provider.auth is AuthType.SESSION_TOKEN:
                 env["AWS_SESSION_TOKEN"] = ""
+
+    # 値は mise run keys が乱数で埋める。生成時に入れると golden が毎回変わる
+    for consumer in spec.ai.consumers:
+        for key in consumer.keys:
+            env[consumer_key_env(key.name)] = ""
 
     if spec.idp.type is IdpType.KEYCLOAK:
         env["KEYCLOAK_ADMIN"] = "admin"
@@ -819,6 +951,8 @@ def _build_certs(spec: EnvSpec, kong: KongCtx) -> CertsCtx:
 
 def _build_provider_auth(provider, secrets: _SecretRefs) -> dict[str, str]:
     path = f"ai-{provider.type.value}"
+    if provider.auth is AuthType.NONE:
+        return {}
     if provider.type is ProviderType.AZURE:
         if provider.auth is AuthType.MANAGED_IDENTITY:
             return {
@@ -940,6 +1074,86 @@ def _build_pii_sanitizer(spec: EnvSpec) -> PiiSanitizerCtx:
     )
 
 
+def consumer_key_env(key_name: str) -> str:
+    return "AI_CONSUMER_KEY_" + key_name.upper().replace("-", "_")
+
+
+def _build_access(spec: EnvSpec, kong: KongCtx) -> AccessCtx:
+    cp = kong.cp_name
+    consumers = tuple(
+        ConsumerCtx(
+            name=c.name,
+            ref=f"{cp}-consumer-{c.name}",
+            groups=tuple(c.groups),
+            keys=tuple(
+                ConsumerKeyCtx(
+                    name=k.name, ref=f"{cp}-credential-{k.name}", env_var=consumer_key_env(k.name), ttl=k.ttl
+                )
+                for k in c.keys
+            ),
+        )
+        for c in spec.ai.consumers
+    )
+    groups = []
+    for group in spec.ai.consumer_groups:
+        limit = group.rate_limit
+        policy_name = f"ai-rate-limiting-advanced-{group.name}" if limit else None
+        groups.append(
+            ConsumerGroupCtx(
+                name=group.name,
+                ref=f"{cp}-consumer-group-{group.name}",
+                members=tuple(c.name for c in consumers if group.name in c.groups),
+                policy_name=policy_name,
+                policy_ref=f"{cp}-{policy_name}" if policy_name else None,
+                tokens=limit.tokens if limit else None,
+                window=limit.window if limit else None,
+            )
+        )
+    return AccessCtx(
+        enabled=bool(consumers),
+        auth_strategy_name="key-auth",
+        auth_strategy_ref=f"{cp}-key-auth",
+        # key-auth の既定。OpenAI SDK の Authorization: Bearer は key-auth が読まないので、SDK からは default_headers で渡す
+        key_name="apikey",
+        consumers=consumers,
+        groups=tuple(groups),
+    )
+
+
+def _build_local_llm(spec: EnvSpec, ports: dict[str, int]) -> LocalLlmCtx:
+    owner_of = {port: key for key, port in ports.items()}
+    models = []
+    for provider in spec.ai.providers:
+        for model in provider.models:
+            if not model.serve:
+                continue
+            port = model.serve_port
+            if port in owner_of:
+                raise PortConflictError(
+                    f"models[{model.name}].serve の待ち受けポート {port} は {owner_of[port]} が使っています。"
+                    "upstream_url のポートを変えてください。"
+                )
+            cpu = model.serve.runtime is ServeRuntime.CPU
+            models.append(
+                ServedModelCtx(
+                    name=model.name,
+                    runtime=model.serve.runtime,
+                    source=model.serve.model or model.target_name,
+                    # Kong は target 名を body の model に入れて送るので、vLLM 側の公開名をそれに揃える
+                    served_name=model.target_name,
+                    port=port,
+                    args=tuple(model.serve.args),
+                    service=f"vllm-{model.name}" if cpu else None,
+                )
+            )
+    return LocalLlmCtx(
+        enabled=bool(models),
+        state_dir=".vllm",
+        cpu_image=VLLM_CPU_IMAGE,
+        models=tuple(models),
+    )
+
+
 def build_context(spec: EnvSpec) -> Ctx:
     ports = allocate_ports(spec)
     kong = _build_kong(spec)
@@ -959,6 +1173,8 @@ def build_context(spec: EnvSpec) -> Ctx:
         prompt_guard=_build_prompt_guard(spec),
         prompt_compressor=_build_prompt_compressor(spec),
         pii_sanitizer=_build_pii_sanitizer(spec),
+        access=_build_access(spec, kong),
+        local_llm=_build_local_llm(spec, ports),
         certs=_build_certs(spec, kong),
         deck=deck,
         secrets=_build_secrets(spec, refs),

@@ -1,0 +1,180 @@
+_defaults:
+  kongctl:
+    namespace: acme
+
+ai_gateways:
+  - ref: acme-ai-gateway
+    name: acme-ai-gateway
+    display_name: acme-ai-gateway
+    deployment_type: hybrid
+
+    model_providers:
+      - ref: azure
+        ai_gateway: !ref acme-ai-gateway#id
+        name: azure
+        type: azure
+        display_name: azure
+        config:
+          service: azure-foundry
+          foundry:
+            resource: acme-foundry
+          auth:
+            type: basic
+            headers:
+              - name: api-key
+                value: !env AZURE_OPENAI_API_KEY
+
+    models:
+      - ref: gpt-5-6
+        ai_gateway: !ref acme-ai-gateway#id
+        name: gpt-5-6
+        display_name: gpt-5-6
+        type: model
+        enabled: true
+        capabilities:
+          - generate
+        formats:
+          - type: openai
+        access:
+          auth_strategies:
+            - key-auth
+        targets:
+          - name: gpt-5.6
+            provider: azure
+            weight: 100
+            config:
+              type: azure
+        config:
+          model:
+            name_header: true
+          response_streaming: allow
+          # v1 の log_payloads に相当。v2 でのフィールド名は payloads で、log_payloads は弾かれる。
+          # プロンプトと応答本文をそのままスパンに載せるので、検証環境だけの設定
+          logging:
+            payloads: true
+          route:
+            paths:
+              - /v1/gpt-5-6
+            protocols:
+              - http
+              - https
+            strip_path: true
+
+    auth_strategies:
+      - ref: acme-ai-gateway-key-auth
+        ai_gateway: !ref acme-ai-gateway#id
+        name: key-auth
+        display_name: Key Auth
+        type: key-auth
+        config:
+          key_names:
+            - apikey
+
+    consumers:
+      - ref: acme-ai-gateway-consumer-alice
+        ai_gateway: !ref acme-ai-gateway#id
+        name: alice
+        display_name: alice
+        type: api-key
+        credentials:
+          - ref: acme-ai-gateway-credential-alice
+            name: alice
+            display_name: alice
+            type: api-key
+            api_key: !secret {source: !env AI_CONSUMER_KEY_ALICE}
+      - ref: acme-ai-gateway-consumer-bob
+        ai_gateway: !ref acme-ai-gateway#id
+        name: bob
+        display_name: bob
+        type: api-key
+        credentials:
+          - ref: acme-ai-gateway-credential-bob
+            name: bob
+            display_name: bob
+            type: api-key
+            api_key: !secret {source: !env AI_CONSUMER_KEY_BOB}
+          - ref: acme-ai-gateway-credential-bob-temporary
+            name: bob-temporary
+            display_name: bob-temporary
+            type: api-key
+            api_key: !secret {source: !env AI_CONSUMER_KEY_BOB_TEMPORARY}
+            # 作成時点からの残り秒数。Konnect が残り秒数を返すので kongctl は sync のたびに作り直し、
+            # 期限前に同じ名前で作り直したキーは DP が 401 で弾く（2.2.0 と 2.3.0 で実測）。期限後は同じ値で復活する
+            ttl: 3600
+
+    consumer_groups:
+      - ref: acme-ai-gateway-consumer-group-sales
+        ai_gateway: !ref acme-ai-gateway#id
+        name: sales
+        display_name: sales
+        consumers:
+          - alice
+        policies:
+          - ai-rate-limiting-advanced-sales
+      - ref: acme-ai-gateway-consumer-group-engineering
+        ai_gateway: !ref acme-ai-gateway#id
+        name: engineering
+        display_name: engineering
+        consumers:
+          - bob
+
+    policies:
+      - ref: acme-ai-gateway-ai-rate-limiting-advanced-sales
+        ai_gateway: !ref acme-ai-gateway#id
+        name: ai-rate-limiting-advanced-sales
+        display_name: AI Rate Limiting Advanced (sales)
+        type: ai-rate-limiting-advanced
+        # consumer_groups[].policies から参照してグループに掛ける
+        global: false
+        enabled: true
+        config:
+          # cluster は hybrid では使えず、redis は sync_rate が要る。DP 1 台のラボなので local
+          strategy: local
+          policies:
+            # match を省いた policy は「どの match にも当たらなかったリクエスト」の受け皿として扱われる
+            - match:
+                - type: consumer_group
+                  key: name
+                  values:
+                    - sales
+                  partition_by: true
+              window_type: fixed
+              limits:
+                - limit: 10000
+                  window_size: 60
+                  tokens_count_strategy: total_tokens
+      - ref: acme-ai-gateway-opentelemetry
+        ai_gateway: !ref acme-ai-gateway#id
+        name: opentelemetry
+        display_name: OpenTelemetry
+        type: opentelemetry
+        global: true
+        enabled: true
+        config:
+          traces_endpoint: http://otel-lgtm:4318/v1/traces
+          # logs_endpoint が運ぶのは Kong 内部のエラーログだけ。
+          # アクセスログはプラグイン内の別エクスポータで、これを設定しないと出ない。
+          # 平坦な access_logs_endpoint は非推奨なのでレコード側に書く
+          logs_endpoint: http://otel-lgtm:4318/v1/logs
+          access_logs:
+            endpoint: http://otel-lgtm:4318/v1/logs
+          # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
+          # Prometheus プラグインは使わない
+          metrics:
+            endpoint: http://otel-lgtm:4318/v1/metrics
+            push_interval: 15
+            enable_request_metrics: true
+            enable_latency_metrics: true
+            enable_bandwidth_metrics: true
+            enable_upstream_health_metrics: true
+            enable_consumer_attribute: true
+            enable_ai_metrics: true
+          resource_attributes:
+            service.name: acme-ai-gateway
+
+    data_plane_certificates:
+      - ref: acme-ai-gateway-cert
+        ai_gateway: !ref acme-ai-gateway#id
+        title: Cluster Certificate
+        description: Cluster certificate for acme-ai-gateway
+        cert: !file ../.certs/cluster.crt
