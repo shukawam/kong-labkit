@@ -23,6 +23,12 @@ ai_gateways:
     name: {{ kong.cp_name }}
     display_name: {{ kong.cp_name }}
     deployment_type: hybrid
+{% if kong.min_runtime_version %}
+    # Konnect は min_runtime_version より新しい版の項目を受け付けないので、DP が動かせない設定を入れさせない。
+    # 版がずれても同期自体は止まらない（2.3 の CP に 2.2.0 の DP で実測）。自動昇格は最低版を上げ、下げられなくなる
+    min_runtime_version: '{{ kong.min_runtime_version }}'
+    runtime_auto_upgrade: false
+{% endif %}
 
     model_providers:
 {% for provider in spec.ai.providers %}
@@ -39,7 +45,11 @@ ai_gateways:
 {% elif provider.instance %}
           instance: {{ provider.instance }}
 {% endif %}
-{% if provider.type.value == 'azure' and provider.auth.value == 'managed-identity' %}
+{% if provider.auth.value == 'none' %}
+          # auth は省けない。type だけ置けばヘッダを足さずに上流へ流す
+          auth:
+            type: basic
+{% elif provider.type.value == 'azure' and provider.auth.value == 'managed-identity' %}
           auth:
             type: azure
             use_managed_identity: true
@@ -84,14 +94,23 @@ ai_gateways:
         display_name: {{ model.name }}
         type: model
         enabled: true
-{% if prompt_compressor.enabled and provider.type.value != 'bedrock' %}
+{% if prompt_compressor.enabled and provider.type.value != 'bedrock' and model.capabilities == ['generate'] and model.formats == ['openai'] %}
         policies:
           - ai-prompt-compressor
 {% endif %}
         capabilities:
-          - generate
+{% for capability in model.capabilities %}
+          - {{ capability.value }}
+{% endfor %}
         formats:
-          - type: openai
+{% for format in model.formats %}
+          - type: {{ format.value }}
+{% endfor %}
+{% if access.enabled %}
+        access:
+          auth_strategies:
+            - {{ access.auth_strategy_name }}
+{% endif %}
         targets:
           - name: {{ model.model_id or model.name }}
             provider: {{ provider.type.value }}
@@ -106,6 +125,9 @@ ai_gateways:
 {% endif %}
 {% if provider.region %}
               region: {{ provider.region }}
+{% endif %}
+{% if model.upstream_url %}
+              upstream_url: {{ model.upstream_url }}
 {% endif %}
         config:
           model:
@@ -146,7 +168,59 @@ ai_gateways:
             strip_path: true
 {% endfor %}
 {% endfor %}
-{% if prompt_guard.enabled or prompt_compressor.enabled or pii_sanitizer.enabled or otel.enabled %}
+{% if access.enabled %}
+
+    auth_strategies:
+      - ref: {{ access.auth_strategy_ref }}
+        ai_gateway: !ref {{ kong.cp_name }}#id
+        name: {{ access.auth_strategy_name }}
+        display_name: Key Auth
+        type: key-auth
+        config:
+          key_names:
+            - {{ access.key_name }}
+
+    consumers:
+{% for consumer in access.consumers %}
+      - ref: {{ consumer.ref }}
+        ai_gateway: !ref {{ kong.cp_name }}#id
+        name: {{ consumer.name }}
+        display_name: {{ consumer.name }}
+        type: api-key
+        credentials:
+{% for key in consumer.keys %}
+          - ref: {{ key.ref }}
+            name: {{ key.name }}
+            display_name: {{ key.name }}
+            type: api-key
+            api_key: !secret {source: !env {{ key.env_var }}}
+{% if key.ttl %}
+            # 作成時点からの残り秒数。Konnect が残り秒数を返すので kongctl は sync のたびに作り直し、
+            # 期限前に同じ名前で作り直したキーは DP が 401 で弾く（2.2.0 と 2.3.0 で実測）。期限後は同じ値で復活する
+            ttl: {{ key.ttl }}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% if access.groups %}
+
+    consumer_groups:
+{% for group in access.groups %}
+      - ref: {{ group.ref }}
+        ai_gateway: !ref {{ kong.cp_name }}#id
+        name: {{ group.name }}
+        display_name: {{ group.name }}
+        consumers:
+{% for member in group.members %}
+          - {{ member }}
+{% endfor %}
+{% if group.policy_name %}
+        policies:
+          - {{ group.policy_name }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}
+{% if prompt_guard.enabled or prompt_compressor.enabled or pii_sanitizer.enabled or otel.enabled or access.rate_limited_groups %}
 
     policies:
 {% if prompt_guard.enabled %}
@@ -215,6 +289,32 @@ ai_gateways:
           block_if_detected: false
           recover_redacted: false
 {% endif %}
+{% for group in access.rate_limited_groups %}
+      - ref: {{ group.policy_ref }}
+        ai_gateway: !ref {{ kong.cp_name }}#id
+        name: {{ group.policy_name }}
+        display_name: AI Rate Limiting Advanced ({{ group.name }})
+        type: ai-rate-limiting-advanced
+        # consumer_groups[].policies から参照してグループに掛ける
+        global: false
+        enabled: true
+        config:
+          # cluster は hybrid では使えず、redis は sync_rate が要る。DP 1 台のラボなので local
+          strategy: local
+          policies:
+            # match を省いた policy は「どの match にも当たらなかったリクエスト」の受け皿として扱われる
+            - match:
+                - type: consumer_group
+                  key: name
+                  values:
+                    - {{ group.name }}
+                  partition_by: true
+              window_type: fixed
+              limits:
+                - limit: {{ group.tokens }}
+                  window_size: {{ group.window }}
+                  tokens_count_strategy: total_tokens
+{% endfor %}
 {% if otel.enabled %}
       - ref: {{ kong.cp_name }}-opentelemetry
         ai_gateway: !ref {{ kong.cp_name }}#id

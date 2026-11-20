@@ -1,4 +1,6 @@
+import re
 import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -24,7 +26,9 @@ def test_mise_is_valid_toml_with_expected_tasks():
 
 def test_mise_loads_dotenv():
     doc = tomllib.loads(render_all(ctx_for())["mise.toml"])
-    assert doc["env"]["mise"]["file"] == ".env"
+    # env.mise.file は mise 2026.12.0 で削除予定で、2026.10 時点でも全タスクに deprecated 警告が出る
+    assert doc["env"]["_"]["file"] == ".env"
+    assert "mise" not in doc["env"]
 
 
 def test_sync_uses_kongctl_for_konnect_ai_gateway_v2():
@@ -250,3 +254,16 @@ def test_v1_konnect_tasks_have_no_secrets_to_write(gateway):
     ctx = ctx_for(gateway=gateway, ai={"providers": [AZURE_PROVIDER]})
     tasks = tomllib.loads(render_all(ctx)["mise.toml"])["tasks"]
     assert all("--write-secrets" not in tasks[t]["run"] for t in ("setup", "sync", "diff"))
+
+
+@pytest.mark.parametrize(
+    "example", sorted((Path(__file__).resolve().parents[1] / "examples").glob("*.yaml")), ids=lambda p: p.stem
+)
+def test_shell_variables_are_not_glued_to_japanese_text(example):
+    # ja_JP.UTF-8 の bash は $port） の全角括弧の先頭バイトまで変数名に取り込み、set -u で落ちる
+    from generator.context import build_context
+    from generator.schema import load_spec
+
+    text = render_all(build_context(load_spec(example)))["mise.toml"]
+    glued = re.findall(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]", text)
+    assert glued == [], glued

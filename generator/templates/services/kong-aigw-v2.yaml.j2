@@ -31,6 +31,12 @@ kong:
 {% endif %}
   volumes:
     - .certs:/etc/kong/cluster-certs
+{% if kong.extra_hosts %}
+  extra_hosts:
+{% for host in kong.extra_hosts %}
+    - {{ host }}
+{% endfor %}
+{% endif %}
 {% if prompt_compressor.enabled or pii_sanitizer.enabled %}
   depends_on:
 {% if prompt_compressor.enabled %}

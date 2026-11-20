@@ -1,0 +1,5 @@
+.env
+.certs/
+config/kong/certs/
+.venv/
+__pycache__/

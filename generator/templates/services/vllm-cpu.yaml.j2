@@ -1,0 +1,24 @@
+{% for model in local_llm.cpu %}
+{{ model.service }}:
+  <<: *default
+  container_name: {{ model.service }}
+  image: {{ local_llm.cpu_image }}
+  # 既定の 64MB では EngineCore が共有メモリ（160MiB）を確保できずに起動しない
+  shm_size: 1g
+  ports:
+    - 127.0.0.1:{{ model.port }}:8000
+  volumes:
+    # ホストの vllm-metal とダウンロード済みの重みを共有する
+    - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+  command:
+{% for arg in model.container_command %}
+    - {{ arg | tojson }}
+{% endfor %}
+  healthcheck:
+    test: ["CMD", "curl", "-sf", "http://localhost:8000/v1/models"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+    # 初回は重みのダウンロードがあるので、その間を unhealthy と数えない
+    start_period: 300s
+{% endfor %}

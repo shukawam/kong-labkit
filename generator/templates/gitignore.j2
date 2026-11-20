@@ -3,3 +3,6 @@
 config/kong/certs/
 .venv/
 __pycache__/
+{% if local_llm.enabled %}
+{{ local_llm.state_dir }}/
+{% endif %}

@@ -1,0 +1,164 @@
+_defaults:
+  kongctl:
+    namespace: acme
+
+ai_gateways:
+  - ref: acme-ai-gateway
+    name: acme-ai-gateway
+    display_name: acme-ai-gateway
+    deployment_type: hybrid
+
+    model_providers:
+      - ref: vllm
+        ai_gateway: !ref acme-ai-gateway#id
+        name: vllm
+        type: vllm
+        display_name: vllm
+        config:
+          # auth は省けない。type だけ置けばヘッダを足さずに上流へ流す
+          auth:
+            type: basic
+      - ref: openai
+        ai_gateway: !ref acme-ai-gateway#id
+        name: openai
+        type: openai
+        display_name: openai
+        config:
+          # auth は省けない。type だけ置けばヘッダを足さずに上流へ流す
+          auth:
+            type: basic
+
+    models:
+      - ref: qwen3-5-0-8b
+        ai_gateway: !ref acme-ai-gateway#id
+        name: qwen3-5-0-8b
+        display_name: qwen3-5-0-8b
+        type: model
+        enabled: true
+        capabilities:
+          - generate
+        formats:
+          - type: openai
+        targets:
+          - name: qwen3-5-0-8b
+            provider: vllm
+            weight: 100
+            config:
+              type: vllm
+              upstream_url: http://host.docker.internal:8001/v1/chat/completions
+        config:
+          model:
+            name_header: true
+          response_streaming: allow
+          # v1 の log_payloads に相当。v2 でのフィールド名は payloads で、log_payloads は弾かれる。
+          # プロンプトと応答本文をそのままスパンに載せるので、検証環境だけの設定
+          logging:
+            payloads: true
+          route:
+            paths:
+              - /v1/qwen3-5-0-8b
+            protocols:
+              - http
+              - https
+            strip_path: true
+      - ref: bge-reranker-v2-m3
+        ai_gateway: !ref acme-ai-gateway#id
+        name: bge-reranker-v2-m3
+        display_name: bge-reranker-v2-m3
+        type: model
+        enabled: true
+        capabilities:
+          - rerank
+        formats:
+          - type: passthrough
+        targets:
+          - name: BAAI/bge-reranker-v2-m3
+            provider: vllm
+            weight: 100
+            config:
+              type: vllm
+              upstream_url: http://host.docker.internal:8003/v1/rerank
+        config:
+          model:
+            name_header: true
+          response_streaming: allow
+          # v1 の log_payloads に相当。v2 でのフィールド名は payloads で、log_payloads は弾かれる。
+          # プロンプトと応答本文をそのままスパンに載せるので、検証環境だけの設定
+          logging:
+            payloads: true
+          route:
+            paths:
+              - /v1/bge-reranker-v2-m3
+            protocols:
+              - http
+              - https
+            strip_path: true
+      - ref: multilingual-e5-base
+        ai_gateway: !ref acme-ai-gateway#id
+        name: multilingual-e5-base
+        display_name: multilingual-e5-base
+        type: model
+        enabled: true
+        capabilities:
+          - embeddings
+        formats:
+          - type: openai
+        targets:
+          - name: intfloat/multilingual-e5-base
+            provider: openai
+            weight: 100
+            config:
+              type: openai
+              upstream_url: http://host.docker.internal:8002/v1/embeddings
+        config:
+          model:
+            name_header: true
+          response_streaming: allow
+          # v1 の log_payloads に相当。v2 でのフィールド名は payloads で、log_payloads は弾かれる。
+          # プロンプトと応答本文をそのままスパンに載せるので、検証環境だけの設定
+          logging:
+            payloads: true
+          route:
+            paths:
+              - /v1/multilingual-e5-base
+            protocols:
+              - http
+              - https
+            strip_path: true
+
+    policies:
+      - ref: acme-ai-gateway-opentelemetry
+        ai_gateway: !ref acme-ai-gateway#id
+        name: opentelemetry
+        display_name: OpenTelemetry
+        type: opentelemetry
+        global: true
+        enabled: true
+        config:
+          traces_endpoint: http://otel-lgtm:4318/v1/traces
+          # logs_endpoint が運ぶのは Kong 内部のエラーログだけ。
+          # アクセスログはプラグイン内の別エクスポータで、これを設定しないと出ない。
+          # 平坦な access_logs_endpoint は非推奨なのでレコード側に書く
+          logs_endpoint: http://otel-lgtm:4318/v1/logs
+          access_logs:
+            endpoint: http://otel-lgtm:4318/v1/logs
+          # Grafana のダッシュボードはここから出る OTLP メトリクスだけを見ている。
+          # Prometheus プラグインは使わない
+          metrics:
+            endpoint: http://otel-lgtm:4318/v1/metrics
+            push_interval: 15
+            enable_request_metrics: true
+            enable_latency_metrics: true
+            enable_bandwidth_metrics: true
+            enable_upstream_health_metrics: true
+            enable_consumer_attribute: true
+            enable_ai_metrics: true
+          resource_attributes:
+            service.name: acme-ai-gateway
+
+    data_plane_certificates:
+      - ref: acme-ai-gateway-cert
+        ai_gateway: !ref acme-ai-gateway#id
+        title: Cluster Certificate
+        description: Cluster certificate for acme-ai-gateway
+        cert: !file ../.certs/cluster.crt
